@@ -21,7 +21,7 @@ public partial class MainForm : Form
     static readonly Color Cy = Color.FromArgb(0, 190, 190);
     // 备份数量上限：超出后自动删除最旧备份
     const int MB = 10;
-    const string VER = "1.7";
+    const string VER = "1.81";
 
     // _bd：程序所在基础目录  _ad：AUM管理组件目录（优先使用子目录，否则退回到 _bd）
     readonly string _bd = AppDomain.CurrentDomain.BaseDirectory;
@@ -43,18 +43,131 @@ public partial class MainForm : Form
     Label lbPg;
     Timer _st, _pt, _ct;
     int _pv; bool _sa = true, _cdBusy;
+    // 字体自适应：记录每个控件在“基准尺寸”下的字体规格，窗口缩放时按比例整体缩放字体，
+    // 使任何窗口大小下文字都刚好完整显示（不裁剪、不用滚动条）
+    readonly System.Collections.Generic.Dictionary<Control, (string Fam, float Size, FontStyle Style)> _baseFonts = new();
+    // 字体缓存：按(字体族,字号,样式)复用同一 Font 实例，避免频繁 new/Dispose 造成卡顿与“用已释放字体”崩溃
+    readonly System.Collections.Generic.Dictionary<(string, float, FontStyle), Font> _fontCache = new();
+    float _lastRatio = -1f;
+    int _lastScaleTick;
+    Timer _rz;
+    // 基准客户区尺寸：在此尺寸下界面文字完整显示；比例 = min(宽比, 高比)
+    const float RefW = 1180f, RefH = 780f;
 
     // 构造函数：初始化窗口属性、检测 AUM 管理组件目录、构建 UI、绑定事件
     public MainForm()
     {
         _ad = Directory.Exists(Path.Combine(_bd, "AUM管理组件")) ? Path.Combine(_bd, "AUM管理组件") : _bd;
         _gr = Directory.GetParent(_ad)?.FullName ?? _ad;
+        LoadWindowIcon();
         AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96F, 96F);
-        MinimumSize = new Size(1024, 700); Size = new Size(1200, 820);
+        // 允许把窗口缩得更小；配合 ScaleFonts() 字体等比缩放，任意尺寸下文字都完整不裁剪
+        MinimumSize = new Size(820, 560); Size = new Size(1200, 820);
         StartPosition = FormStartPosition.CenterScreen; Text = "ServerS4A12 v" + VER;
         BackColor = Bg; Font = new Font("Microsoft YaHei", 10f);
         AllowDrop = true; DragEnter += De; DragDrop += Dd; FormClosing += Fc;
-        Build(); Ti(); Load += (s, e) => { Ck(); Rf(); };
+        Build(); Ti();
+        // 开启双缓冲：大幅减少拉伸时的闪烁与卡顿，让实时缩放更顺滑
+        DoubleBuffered = true;
+        EnableDoubleBuffer(this);
+        // 记录基准字体。拖动时“实时”缩放，但用节流(≤~30fps)+粗量化(0.04)+仅重设文本控件+不强制重排，
+        // 把 1.6 没有的“重排卡顿”降到最低，兼顾实时与流畅。
+        CaptureBaseFonts(this);
+        _rz = new Timer { Interval = 45 };                 // 拖动停顿后的收尾刷新
+        _rz.Tick += (s, e) => { _rz.Stop(); _lastScaleTick = Environment.TickCount; ScaleFonts(); };
+        SizeChanged += (s, e) =>
+        {
+            int now = Environment.TickCount;
+            if (now - _lastScaleTick >= 33) { _lastScaleTick = now; ScaleFonts(); }  // 距上次≥33ms直接实时缩放
+            else { _rz.Stop(); _rz.Start(); }                                        // 太密则并到收尾刷新
+        };
+        DpiChanged += (s, e) => { _lastRatio = -1f; ScaleFonts(); };
+        Load += (s, e) => { ScaleFonts(); Ck(); Rf(); };
+    }
+
+    // LoadWindowIcon() 设置窗口左上角小图标：优先用内嵌的 图标EXE.ico（单文件EXE也可靠），
+    // 失败则从当前EXE自身提取，尽量保证标题栏/任务栏图标一致
+    void LoadWindowIcon()
+    {
+        try
+        {
+            using var s = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("app.ico");
+            if (s != null) { Icon = new Icon(s); return; }
+        }
+        catch { }
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(exe) && File.Exists(exe))
+            {
+                var ic = Icon.ExtractAssociatedIcon(exe);
+                if (ic != null) Icon = ic;
+            }
+        }
+        catch { }
+    }
+
+    // CaptureBaseFonts() 递归记录“会显示文字的控件”在基准尺寸下的字体规格，作为缩放基线。
+    // 只收文本控件(按钮/标签/复选/分组框标题/链接/列表)，跳过纯容器(减少 WM_SETFONT 与重排开销)；
+    // 特别跳过运行日志 RichTextBox —— 重设它的 Font 会清掉每行颜色格式，日志必须保持固定字体与彩色。
+    static bool IsTextControl(Control c)
+        => c is Button || c is Label || c is LinkLabel || c is CheckBox || c is GroupBox || c is ListView;
+    void CaptureBaseFonts(Control c)
+    {
+        if (c is RichTextBox) return;
+        if (IsTextControl(c))
+        {
+            var f = c.Font;
+            _baseFonts[c] = (f.FontFamily.Name, f.Size, f.Style);
+        }
+        foreach (Control ch in c.Controls) CaptureBaseFonts(ch);
+    }
+
+    // EnableDoubleBuffer() 递归为容器控件开启双缓冲（通过反射设置受保护属性），显著降低拉伸时的闪烁
+    static void EnableDoubleBuffer(Control root)
+    {
+        var prop = typeof(Control).GetProperty("DoubleBuffered",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        foreach (Control c in root.Controls)
+        {
+            if (c is TableLayoutPanel || c is Panel || c is GroupBox)
+                try { prop?.SetValue(c, true); } catch { }
+            EnableDoubleBuffer(c);
+        }
+    }
+
+    // ScaleFonts() 依当前客户区尺寸相对基准(RefW x RefH)的比例，整体缩放所有控件字体。
+    // 比例 = min(宽比, 高比) 并封顶为 1.0：窗口 >= 基准尺寸时用原始字体（与原先“显示完全”一致）；
+    // 窗口更小时字体等比缩小，使按钮/标签文字始终完整显示，无需滚动条、不被裁剪。
+    // 关键优化：字体走缓存（不再频繁 new/Dispose，杜绝“用已释放字体”崩溃）；比例量化后未变则直接跳过（消除卡顿）。
+    void ScaleFonts()
+    {
+        if (_baseFonts.Count == 0 || IsDisposed || !IsHandleCreated) return;
+        float sc = DeviceDpi / 96f; if (sc <= 0) sc = 1f;
+        float ratio = Math.Min(ClientSize.Width / (RefW * sc), ClientSize.Height / (RefH * sc));
+        if (float.IsNaN(ratio) || ratio <= 0) return;
+        if (ratio > 1f) ratio = 1f;          // 不超过基准，避免大窗口下固定高度行被撑裂
+        if (ratio < 0.35f) ratio = 0.35f;    // 兜底下限，字体不至于小到不可见
+        ratio = (float)Math.Round(ratio / 0.04f) * 0.04f;     // 量化到 0.04 步长，减少拖动中的重排次数(卡顿来源)
+        if (Math.Abs(ratio - _lastRatio) < 0.001f) return;     // 比例未变则跳过，避免拖拽卡顿
+        _lastRatio = ratio;
+        SuspendLayout();
+        foreach (var kv in _baseFonts)
+        {
+            var c = kv.Key; var b = kv.Value;
+            float size = Math.Max(5f, (float)Math.Round(b.Size * ratio, 1));
+            var key = (b.Fam, size, b.Style);
+            if (!_fontCache.TryGetValue(key, out var f))
+            {
+                try { f = new Font(b.Fam, size, b.Style); } catch { continue; }
+                _fontCache[key] = f;
+            }
+            if (!ReferenceEquals(c.Font, f)) c.Font = f;       // 缓存字体永不释放，控件间可安全共享
+        }
+        // ResumeLayout(false)：不强制同步整树重排（那正是 1.6 没有、导致本版卡顿的开销）。
+        // 因布局是百分比/绝对列，不依赖字号；且只会缩小字体，AutoSize 标签不会裁剪。
+        // 重排随拖动本身的自然布局一起完成，避免额外的同步重排卡顿。
+        ResumeLayout(false);
     }
 
     // B() 快捷创建按钮：统一设置扁平化样式、颜色、字号、光标，避免每次都写一堆重复代码
@@ -207,11 +320,14 @@ public partial class MainForm : Form
         lbar.Resize += (s, e) => { btCp.Location = new Point(lbar.Width - 140, 4); btCl.Location = new Point(lbar.Width - 70, 4); };
         lp.Controls.Add(rt); lp.Controls.Add(pb); lp.Controls.Add(lbPg); lp.Controls.Add(lbar); root.Controls.Add(lp, 0, 2);
 
-        // ===== 底部链接栏：显示 GitHub 仓库链接 =====
-        var r3 = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1, BackColor = Color.FromArgb(45, 45, 45), Padding = new Padding(8, 0, 8, 0) };
+        // ===== 底部链接栏：GM工具地址 + 仓库链接 =====
+        var r3 = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Color.FromArgb(45, 45, 45), Padding = new Padding(8, 0, 8, 0) };
+        r3.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F)); r3.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+        var lg = new LinkLabel { Text = "GM工具: http://localhost:5050", ForeColor = Color.Gold, LinkColor = Color.Gold, AutoSize = true, Anchor = AnchorStyles.Left };
+        lg.LinkClicked += (s, e) => { Lg(">>> 打开GM工具网页", Color.Gold); Process.Start(new ProcessStartInfo { FileName = "http://localhost:5050", UseShellExecute = true }); };
         var lr = new LinkLabel { Text = "仓库: codeberg.org/rewio/ServerS4A12", ForeColor = Color.LightBlue, LinkColor = Color.LightBlue, AutoSize = true, Anchor = AnchorStyles.Right };
         lr.LinkClicked += (s, e) => { Lg(">>> 打开仓库链接", Color.CornflowerBlue); Process.Start("explorer.exe", "https://codeberg.org/rewio/ServerS4A12"); };
-        r3.Controls.Add(lr, 0, 0); root.Controls.Add(r3, 0, 3);
+        r3.Controls.Add(lg, 0, 0); r3.Controls.Add(lr, 1, 0); root.Controls.Add(r3, 0, 3);
     }
 
     // Ti() 初始化三个 Timer：
@@ -220,7 +336,7 @@ public partial class MainForm : Form
     //   _st：状态刷新定时器（2秒间隔，刷新 UI 上的服务端状态、PVF、版本信息）
     void Ti() { _pt = new Timer { Interval = 200 }; _pt.Tick += (s, e) => { _pv++; if (_pv >= 95) _pt.Stop(); pb.Value = _pv; lbPg.Text = "更新进度: " + _pv + "%"; }; _ct = new Timer { Interval = 3000 }; _ct.Tick += (s, e) => { if (_sv.IsRunning) { Lg(">>> 确认服务端运行开始", Gn); _ct.Stop(); } }; _st = new Timer { Interval = 2000 }; _st.Tick += (s, e) => Rs(); _st.Start(); }
     // Fc() 窗口关闭事件：弹出确认对话框，用户确认后才停止服务端并关闭程序
-    void Fc(object s, FormClosingEventArgs e) { var r = MessageBox.Show("退出本程序之后会自动关闭正在运行的服务端，是否确认？", "确认退出", MessageBoxButtons.YesNo, MessageBoxIcon.Warning); if (r == DialogResult.Yes) { _sv.Stop(); _st.Stop(); _pt.Stop(); _ct.Stop(); } else e.Cancel = true; }
+    void Fc(object s, FormClosingEventArgs e) { var r = MessageBox.Show("退出本程序之后会自动关闭正在运行的服务端和GM工具，是否确认？", "确认退出", MessageBoxButtons.YesNo, MessageBoxIcon.Warning); if (r == DialogResult.Yes) { _sv.Stop(); try { foreach (var p in Process.GetProcessesByName("DfoGmTool")) { try { p.Kill(); } catch { } } } catch { } _st.Stop(); _pt.Stop(); _ct.Stop(); _rz?.Stop(); } else e.Cancel = true; }
     // Go() 启动服务端：调用 ServerService.Start() 并启动确认定时器等待进程就绪
     void Go() { _sv.Start(Path.Combine(_ad, "ServerS4A12-AUM")); _ct.Start(); }
     // Play() 异步启动游戏流程：启动服务端 → 等待 5 秒 → 打开游戏客户端 bat 文件
