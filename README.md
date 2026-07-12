@@ -67,6 +67,7 @@ ServerS4A12-管理工具包-v1.55/
 │   ├── save-switch.ps1             # 存档管理脚本
 │   ├── dotnet-install.ps1          # .NET SDK 官方安装器
 │   ├── ServerS4A12-AUM\            # 服务端源码 (Server/Tool/Patch)
+│   ├── dfogmtool\                 # GM工具源码 
 │   ├── DX11补丁\                   # DX11 渲染补丁 (含无水印版)
 │   ├── DX12补丁\                   # DX12 渲染补丁 (含无水印版)
 │   ├── ServerUI-无依赖版.exe       # 便携版 (110.8MB)
