@@ -21,7 +21,7 @@ public partial class MainForm : Form
     static readonly Color Cy = Color.FromArgb(0, 190, 190);
     // 备份数量上限：超出后自动删除最旧备份
     const int MB = 10;
-    const string VER = "1.6";
+    const string VER = "1.7";
 
     // _bd：程序所在基础目录  _ad：AUM管理组件目录（优先使用子目录，否则退回到 _bd）
     readonly string _bd = AppDomain.CurrentDomain.BaseDirectory;
@@ -35,7 +35,7 @@ public partial class MainForm : Form
     // ===== UI 控件声明 =====
     Label lbSt, lbVe, lbPv, lbLu, lbCu, lbBk, lbDr, lbSd;
     Button btPlay, btStop, btRe, btIn, btFu, btVL, btPv;
-    Button btOD, btOB, btMD, btSC, btIm, btEx, btUd, btCp, btCl, btSdk;
+    Button btOD, btOB, btMD, btSC, btIm, btEx, btUd, btCp, btCl, btSdk, btGm;
     CheckBox cbDx, cbDt, cbDw;
     ListView lv;
     RichTextBox rt;
@@ -101,15 +101,40 @@ public partial class MainForm : Form
         cbDw.CheckedChanged += Cd; pg.Controls.Add(cbDw, 0, 3); pg.SetColumnSpan(cbDw, 2);
         gp.Controls.Add(pg); left.Controls.Add(gp, 0, 0);
 
-        // ===== 快速操作区域：PVF 状态显示 / 上次更新时间 / 打开 PVF 目录 =====
+        // ===== 快速操作区域：PVF 状态显示 / 上次更新时间 / 打开 PVF 目录 / GM 工具 =====
         var gq = new GroupBox { Text = "快速操作", Dock = DockStyle.Fill, ForeColor = Txt, BackColor = Bg, Padding = new Padding(6) };
-        var qg = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, BackColor = Bg };
-        qg.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 65F)); qg.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35F));
+        var qg = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 2, BackColor = Bg };
+        qg.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 44F)); qg.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28F)); qg.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28F));
         lbPv = L("PVF: 检测中...", Txt2); lbLu = L("上次更新: 尚未有log日志无法识别版本，请进行更新", Or);
-        qg.Controls.Add(lbPv, 0, 0); qg.Controls.Add(lbLu, 0, 1); qg.SetColumnSpan(lbLu, 2);
+        qg.Controls.Add(lbPv, 0, 0); qg.Controls.Add(lbLu, 0, 1); qg.SetColumnSpan(lbLu, 3);
         btPv = B("打开PVF目录", Bg, 9); btPv.Dock = DockStyle.Fill;
         btPv.Click += (s, e) => { Lg(">>> 打开PVF目录", Color.CornflowerBlue); var d = Path.Combine(_ad, "ServerS4A12-AUM", "dist", "win-x64", "Data", "Pvf"); if (Directory.Exists(d)) Process.Start("explorer.exe", d); else Lg("PVF目录不存在", Color.Gold); };
-        qg.Controls.Add(btPv, 1, 0); gq.Controls.Add(qg); left.Controls.Add(gq, 0, 1);
+        btGm = B("GM工具", Color.FromArgb(218, 165, 32), 10, true); btGm.Dock = DockStyle.Fill;
+        btGm.Click += (s, e) => {
+            Lg(">>> 点击了GM工具", Color.Gold);
+            var gmp = Path.Combine(_ad, "dfogmtool", "publish", "DfoGmTool.exe");
+            if (!File.Exists(gmp)) { Lg("GM工具尚未编译, 请先执行一次增量/全量更新", Or); return; }
+            var sb = Path.Combine(_ad, "ServerS4A12-AUM", "dist", "win-x64");
+            if (!File.Exists(Path.Combine(sb, "Data", "inventory.db")) || !File.Exists(Path.Combine(sb, "Data", "Pvf", "Script.pvf")))
+            { Lg("GM工具启动失败: 服务端数据目录(" + sb + ")不完整, 请先执行一次更新", Or); return; }
+            try { foreach (var p in Process.GetProcessesByName("DfoGmTool")) { try { p.Kill(); } catch { } } } catch { }
+            var psi = new ProcessStartInfo {
+                FileName = gmp,
+                Arguments = "--server-bin \"" + sb + "\"",
+                WorkingDirectory = Path.GetDirectoryName(gmp),
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.Environment["DFO_GM_SERVER_BIN"] = sb;
+            Process.Start(psi);
+            Lg("GM工具已启动 -- 服务端目录: " + sb, Gn);
+            System.Threading.Tasks.Task.Run(async () => {
+                await System.Threading.Tasks.Task.Delay(3000);
+                try { Process.Start(new ProcessStartInfo { FileName = "http://localhost:5050", UseShellExecute = true }); }
+                catch { Lg("浏览器未能自动打开, 请手动访问 http://localhost:5050", Or); }
+            });
+        };
+        qg.Controls.Add(btPv, 1, 0); qg.Controls.Add(btGm, 2, 0); gq.Controls.Add(qg); left.Controls.Add(gq, 0, 1);
 
         // ===== 更新管理区域：增量更新 / 全量更新 / 查看更新日志 =====
         var gu = new GroupBox { Text = "更新管理", Dock = DockStyle.Fill, ForeColor = Txt, BackColor = Bg, Padding = new Padding(6) };
