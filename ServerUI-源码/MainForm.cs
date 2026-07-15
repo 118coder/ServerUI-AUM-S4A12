@@ -555,7 +555,7 @@ public partial class MainForm : Form
         };
 
         // [重启服务端] — 橙色、加粗
-        // 流程: 停止 → 等 1.2 秒 → 启动 → 10 秒后隐藏控制台
+        // 流程: 停止 → 等 1.2 秒 → 启动 → 10 秒后隐藏控制台和DfoServer窗口
         btRe = B("重启服务端", Or, 10, true);
         btRe.Dock = DockStyle.Fill;
         btRe.Click += async (s, e) =>
@@ -564,12 +564,19 @@ public partial class MainForm : Form
             await System.Threading.Tasks.Task.Run(() => _sv.Stop());
             await System.Threading.Tasks.Task.Delay(1200);
             Go();
-            // 10 秒后隐藏控制台窗口
+            // 10 秒后隐藏 bat 控制台窗口
             _ = System.Threading.Tasks.Task.Run(async () =>
             {
                 await System.Threading.Tasks.Task.Delay(10000);
                 Invoke(new Action(() =>
                 { try { _sv.HideConsoleWindow(); } catch { } }));
+            });
+            // 10 秒后隐藏 DfoServer.exe 窗口（确认进程已运行后）
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                await System.Threading.Tasks.Task.Delay(10000);
+                Invoke(new Action(() =>
+                { try { ServerService.HideDfoServerWindow(); } catch { } }));
             });
         };
 
@@ -1251,21 +1258,22 @@ public partial class MainForm : Form
      * 开始游戏完整流程 (Play)
      * 步骤:
      *   1. 启动 start-server.bat
-     *   2. 10 秒后隐藏控制台窗口
+     *   2. 10 秒后隐藏 bat 控制台窗口
      *   3. 等 5 秒确认 DfoServer 已启动
-     *   4. 启动游戏客户端 (本地游戏S4.bat 或 单机游戏启动.bat)
+     *   4. 确认运行后 5 秒隐藏 DfoServer.exe 窗口
+     *   5. 启动游戏客户端 (本地游戏S4.bat 或 单机游戏启动.bat)
      *
      * 修改建议:
-     *   - 想改等待时间? 改 Delay(5000) 中的毫秒数
+     *   - 想改等待时间? 改 Delay() 中的毫秒数
      *   - 想改游戏启动脚本? 改下面的 .bat 文件名
-     *   - 想禁用自动隐藏控制台? 删除 _ = Task.Run(...) 那行
+     *   - 想禁用自动隐藏窗口? 删除对应的 Task.Run 块
      */
     async System.Threading.Tasks.Task Play()
     {
         Lg(">>> 正在启动 start-server.bat...", Color.CornflowerBlue);
         Go();
 
-        // 10 秒后隐藏控制台窗口 (后台任务，不阻塞)
+        // 10 秒后隐藏 bat 控制台窗口 (后台任务，不阻塞)
         _ = System.Threading.Tasks.Task.Run(async () =>
         {
             await System.Threading.Tasks.Task.Delay(10000);
@@ -1278,7 +1286,16 @@ public partial class MainForm : Form
 
         // 确认服务端是否成功启动
         if (_sv.IsRunning)
+        {
             Lg(">>> 服务端进程存活，正在启动游戏...", Gn);
+            // 确认 DfoServer 进程运行后，5 秒后隐藏其控制台窗口
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                await System.Threading.Tasks.Task.Delay(5000);
+                Invoke(new Action(() =>
+                { try { ServerService.HideDfoServerWindow(); } catch { } }));
+            });
+        }
         else
             Lg(">>> 警告: 服务端可能未成功启动", Or);
 

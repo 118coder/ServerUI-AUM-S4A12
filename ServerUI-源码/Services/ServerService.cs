@@ -347,6 +347,36 @@ public class ServerService
     }
 
     /*
+     * 隐藏 DfoServer.exe 的控制台窗口
+     *
+     * 作用: 在服务端启动完成后自动隐藏 DfoServer.exe 的窗口，仅保留后台进程
+     */
+    public static void HideDfoServerWindow()
+    {
+        try
+        {
+            var distDir = GetDistDir();
+            var expected = Path.GetFullPath(Path.Combine(distDir, "DfoServer.exe"));
+            foreach (var p in Process.GetProcessesByName("DfoServer"))
+            {
+                try
+                {
+                    var exePath = p.MainModule?.FileName;
+                    if (exePath != null && string.Equals(exePath, expected, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var hwnd = p.MainWindowHandle;
+                        if (hwnd != IntPtr.Zero)
+                            ShowWindow(hwnd, 0);
+                        break;
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+    }
+
+    /*
      * 检查 PVF 资源文件是否存在
      * 
      * PVF (Package Vault File) 是 DNF 的技能/装备/任务数据文件
