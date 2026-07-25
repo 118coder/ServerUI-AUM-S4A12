@@ -1,6 +1,6 @@
 /*
  * ==================================================================
- *     主窗口类 (MainForm.cs) — ServerS4A12 GUI 管理器 v1.917
+ *     主窗口类 (MainForm.cs) — ServerS4A12 GUI 管理器 v1.918
  * ==================================================================
  *
  * 【功能概览】
@@ -112,8 +112,8 @@ public partial class MainForm : Form
 
     // VER = 当前工具版本号 — 显示在窗口标题和启动日志中
     // 每次发版时只需修改这一个值
-    // 【v1.916】存档操作自动停服/重启
-    const string VER = "1.917";
+    // 【v1.918】切换库文件夹化，杂DB与主DB协同管理，ZIP导入导出
+    const string VER = "1.918";
 
     // ===== 路径计算 =====
     // _bd = EXE 所在目录 (BaseDirectory)
@@ -1018,12 +1018,15 @@ public partial class MainForm : Form
         ag.Controls.Add(ab, 0, 1);
 
         // ============================================================
-        // ★ 存档列表 (lv) ★ — 显示切换库里所有的 .db 存档
+        // ★ 存档列表 (lv) ★ — 显示切换库里所有的存档文件夹
         // 4 列: 序号 | 存档名称(右键双击改名) | 大小 | 修改时间
         //
+        // v1.918: 列表改为显示文件夹名称（存档名称），不再直接读取DB文件。
+        //         左键双击切换时完整恢复 杂DB + 主DB。
+        //
         // 操作方式:
-        //   - 左键双击 → 切换到该存档 (自动备份当前存档)
-        //   - 右键双击 → 重命名存档
+        //   - 左键双击 → 切换到该存档 (自动备份当前所有 inventory* 文件)
+        //   - 右键双击 → 重命名存档文件夹
         //   - 点击"修改时间"列头 → 切换正序/倒序排列
         //
         // v1.85-1 美化: 列表背景色微调，更符合整体深色主题
@@ -1601,39 +1604,39 @@ public partial class MainForm : Form
     // =================================================================
 
     /*
-     * 导入存档 (IA) — 从文件对话框选择一个 .db 文件导入到切换库
+     * 导入存档 (IA) — 选择 ZIP 压缩包，解压覆盖到主存档目录
      */
     void IA()
     {
-        using var d = new OpenFileDialog { Filter = "DB|*.db" };
+        using var d = new OpenFileDialog { Filter = "ZIP|*.zip" };
         if (d.ShowDialog() == DialogResult.OK)
         {
-            var dest = Path.Combine(_ad, "存档管理", "切换库",
-                Path.GetFileName(d.FileName));
-            Directory.CreateDirectory(Path.GetDirectoryName(dest));
-            File.Copy(d.FileName, dest, true);
+            _ar.ImportFromZip(_ad, d.FileName);
             LS("已导入: " + Path.GetFileName(d.FileName));
             RA();
         }
     }
 
     /*
-     * 导出存档 (EC) — 把当前 inventory.db 导出到切换库
+     * 导出当前 (EC) — 把当前 DB 存档 + 杂DB 打包为 ZIP
      */
     void EC()
     {
-        var n = Interaction.InputBox("名称:", "导出存档", "存档");
-        if (!string.IsNullOrWhiteSpace(n))
+        using var d = new SaveFileDialog
         {
-            _ar.Export(_ad, n);
-            LS("已导出: " + n + ".db");
-            RA();
+            Filter = "ZIP|*.zip",
+            FileName = "存档_" + DateTime.Now.ToString("MMdd_HHmm") + ".zip"
+        };
+        if (d.ShowDialog() == DialogResult.OK)
+        {
+            _ar.ExportAsZip(_ad, d.FileName);
+            LS("已导出: " + Path.GetFileName(d.FileName));
         }
     }
 
     /*
-     * 储存当前存档 (SC) — 把当前 inventory.db 以指定名称存到切换库
-     * 默认名称: 当前时间的 MMDD_HHmm 格式
+     * 储存当前存档 (SC) — 在切换库中新建文件夹，存储当前所有 inventory* 文件
+     * v1.918: 创建文件夹储存主DB + 杂DB
      */
     void SC()
     {
@@ -1641,8 +1644,8 @@ public partial class MainForm : Form
             DateTime.Now.ToString("MMdd_HHmm"));
         if (!string.IsNullOrWhiteSpace(n))
         {
-            _ar.Export(_ad, n);
-            LS("已储存到切换库: " + n + ".db");
+            _ar.SaveArchive(_ad, n);
+            LS("已储存到切换库: " + n);
             RA();
         }
     }
@@ -1650,36 +1653,32 @@ public partial class MainForm : Form
     /*
      * 存档列表鼠标事件 (Am)
      *
-     * 双击左键 → 切换存档 (使用 DoSafeSwap 做安全换挡)
-     * 双击右键 → 重命名存档
+     * 双击左键 → 切换存档 (从存档文件夹恢复 杂DB + 主DB)
+     * 双击右键 → 重命名存档文件夹
+     * v1.918: 切换时检查目标文件夹是否存在 inventory.db
      */
     void Am(object s, MouseEventArgs e)
     {
         var h = lv.HitTest(e.X, e.Y);
         if (h?.Item == null) return;
 
-        var nm = h.Item.SubItems[1].Text;  // 存档文件名
+        var nm = h.Item.SubItems[1].Text;  // 存档文件夹名称
 
-        // 右键双击 → 重命名
+        // 右键双击 → 重命名文件夹
         if (e.Button == MouseButtons.Right && e.Clicks == 2)
         {
-            var nn = Interaction.InputBox("修改存档名称:", "重命名",
-                nm.Replace(".db", ""));
-            if (!string.IsNullOrWhiteSpace(nn)
-                && nn != nm.Replace(".db", ""))
+            var nn = Interaction.InputBox("修改存档名称:", "重命名", nm);
+            if (!string.IsNullOrWhiteSpace(nn) && nn != nm)
             {
                 var op = Path.Combine(_ad, "存档管理", "切换库", nm);
-                var nf = nn.EndsWith(".db",
-                    StringComparison.OrdinalIgnoreCase)
-                    ? nn : nn + ".db";
-                var np = Path.Combine(_ad, "存档管理", "切换库", nf);
-                if (File.Exists(op) && !File.Exists(np))
+                var np = Path.Combine(_ad, "存档管理", "切换库", nn);
+                if (Directory.Exists(op) && !Directory.Exists(np))
                 {
-                    File.Move(op, np);
-                    LS("已重命名: " + nm + " -> " + nf);
+                    Directory.Move(op, np);
+                    LS("已重命名: " + nm + " -> " + nn);
                     RA();
                 }
-                else if (File.Exists(np))
+                else if (Directory.Exists(np))
                     Lg("名称已存在", Color.Gold);
                 else
                     Lg("重命名失败", Color.Gold);
@@ -1693,7 +1692,34 @@ public partial class MainForm : Form
             var path = Path.Combine(_ad, "存档管理", "切换库", nm);
             DoArchiveOp(() =>
             {
-                DoSwapCore(path, "已切换到: " + nm);
+                // 检查目标存档文件夹内是否存在 .db 文件
+                if (Directory.GetFiles(path, "*.db").Length == 0)
+                {
+                    Lg(">>> [切换存档] 没有存档", Or);
+                    MessageBox.Show("没有存档", "切换存档",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+                // 仅有一个 .db 且无杂DB时，弹窗询问是否清理主目录杂DB
+                // 选择【是】→ 清理后切换；【否】→ 直接切换；关闭窗口 → 取消操作
+                if (_ar.IsSimpleArchive(_ad, path))
+                {
+                    var r = MessageBox.Show(
+                        "该存档文件夹内仅有一个.DB的主存档文件，是否执行一次对主目录的冗杂DB清理？",
+                        "存档切换",
+                        MessageBoxButtons.YesNoCancel,
+                        MessageBoxIcon.Question);
+                    if (r == DialogResult.Cancel) return false;
+                    _ar.SwitchToArchive(_ad, path, cleanRedundantDbFirst: r == DialogResult.Yes);
+                }
+                else
+                {
+                    _ar.SwitchToArchive(_ad, path);
+                }
+                LS("已切换到: " + nm);
+                RA();
+                TB();
+                if (cbCl != null && cbCl.Checked) CleanRedundantDb();
                 return true;
             });
         }
@@ -1708,8 +1734,8 @@ public partial class MainForm : Form
     }
 
     /*
-     * 清理旧备份 (TB) — 限制备份目录最多保留 MB 个备份文件
-     * 超出限制时删除最旧的备份
+     * 清理旧备份 (TB) — 限制备份目录最多保留 MB 个备份文件夹
+     * v1.918: 改为按文件夹计数，超出限制时删除最旧的备份
      *
      * 修改建议: 改 MB 常量即可改变备份数量上限
      */
@@ -1718,16 +1744,16 @@ public partial class MainForm : Form
         var bd = Path.Combine(_ad, "存档管理", "备份存档");
         if (!Directory.Exists(bd)) return;
 
-        var fs = new DirectoryInfo(bd)
-            .GetFiles("backup_*.db")
-            .OrderByDescending(f => f.LastWriteTime)
+        var dirs = new DirectoryInfo(bd)
+            .GetDirectories("backup_*")
+            .OrderByDescending(d => d.CreationTime)
             .ToList();
 
-        // 删除超出限制的最旧文件
-        while (fs.Count > MB)
+        // 删除超出限制的最旧备份文件夹
+        while (dirs.Count > MB)
         {
-            fs[^1].Delete();           // 删除最后一个 (最旧)
-            fs.RemoveAt(fs.Count - 1);
+            dirs[^1].Delete(true);
+            dirs.RemoveAt(dirs.Count - 1);
         }
     }
 
@@ -1786,32 +1812,25 @@ public partial class MainForm : Form
     }
 
     /*
-     * 存档操作包装器 (DoArchiveOp) — v1.916
+     * 存档操作包装器 (DoArchiveOp) — v1.918
      *
-     * 当服务端运行时，自动停止 → 执行操作 → 自动重启。
-     * 服务端未运行时直接执行操作，不做启停。
+     * 当服务端运行时，弹窗提示用户手动停止，取消操作。
+     * 服务端未运行时直接执行操作。
      */
     void DoArchiveOp(Func<bool> op)
     {
-        bool wasRunning = _sv.IsRunning;
-        if (wasRunning)
+        if (_sv.IsRunning)
         {
-            Lg(">>> 检测到服务端运行中，自动停止以操作存档...", Or);
-            _sv.Stop();
-            System.Threading.Thread.Sleep(600);
+            Lg(">>> [存档管理] 服务端运行中，操作已阻止", Or);
+            MessageBox.Show(
+                "目前服务端正在运行，请结束服务端后再使用存档管理相关功能。",
+                "服务端运行中",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
         }
 
         bool ok = op();
-
-        if (wasRunning)
-        {
-            Lg(">>> 正在自动重启服务端...", Gn);
-            System.Threading.Tasks.Task.Run(async () =>
-            {
-                await System.Threading.Tasks.Task.Delay(600);
-                Invoke(new Action(Go));
-            });
-        }
 
         if (ok && !cbCl.Checked)
         {
@@ -1819,9 +1838,23 @@ public partial class MainForm : Form
         }
     }
 
-    void DoSwapCore(string srcPath, string msg)
+    void DoSwapCore(string path, string msg)
     {
-        _ar.Swap(_ad, srcPath);
+        if (Directory.Exists(path))
+        {
+            // 文件夹存档 → 直接切换（不弹窗，快沿用此路径）
+            _ar.SwitchToArchive(_ad, path);
+        }
+        else if (File.Exists(path))
+        {
+            // 单文件 .db → 兼容拖拽换挡
+            _ar.Swap(_ad, path);
+        }
+        else
+        {
+            Lg(">>> 存档路径无效: " + path, Rd);
+            return;
+        }
         LS(msg);
         RA();
         TB();
@@ -2624,8 +2657,12 @@ public partial class MainForm : Form
             Lg(">>> 服务端已停止，开始更新", Gn);
         }
 
-        Lg(">>> 更新前清理冗余DB...", Gn);
-        CleanRedundantDb();
+        // v1.918: 默认不再清除杂DB，仅勾选【清理冗余DB】时执行
+        if (cbCl.Checked)
+        {
+            Lg(">>> 更新前清理冗余DB...", Gn);
+            CleanRedundantDb();
+        }
 
         pb.Visible = true; lbPg.Visible = true;
         pb.Value = 0; _pv = 0; _stepTarget = 5;
@@ -2665,8 +2702,12 @@ public partial class MainForm : Form
             Lg(">>> 服务端已停止，开始更新", Gn);
         }
 
-        Lg(">>> 更新前清理冗余DB...", Gn);
-        CleanRedundantDb();
+        // v1.918: 默认不再清除杂DB，仅勾选【清理冗余DB】时执行
+        if (cbCl.Checked)
+        {
+            Lg(">>> 更新前清理冗余DB...", Gn);
+            CleanRedundantDb();
+        }
 
         pb.Visible = true; lbPg.Visible = true;
         pb.Value = 0; _pv = 0; _stepTarget = 5;
