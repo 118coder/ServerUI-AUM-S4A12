@@ -190,6 +190,15 @@ foreach ($f in Get-ChildItem $rootDir -File -Filter "*.bat") {
     $name = $f.Name
     Copy-Item $f.FullName (Join-Path $ScriptRoot $name) -Force
 }
+# v1.919: 将 bat 文件从 UTF-8 转换为系统 OEM 代码页编码，避免 cmd.exe 中文乱码
+try {
+    $oemCp = [System.Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage
+    $oemEnc = [System.Text.Encoding]::GetEncoding($oemCp)
+    foreach ($f in Get-ChildItem $ScriptRoot -File -Filter "*.bat") {
+        $content = [System.IO.File]::ReadAllText($f.FullName, [System.Text.Encoding]::UTF8)
+        [System.IO.File]::WriteAllText($f.FullName, $content, $oemEnc)
+    }
+} catch { }
 foreach ($f in Get-ChildItem $rootDir -File -Filter "*.txt", "*.md") {
     $name = $f.Name
     if ($name -match "GameLog|运行日志") { continue }

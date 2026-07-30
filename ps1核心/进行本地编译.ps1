@@ -108,6 +108,12 @@ Write-Host "[4/5] 编译..."
 $buildOk = $false
 $gmBuildOk = $false
 
+# 编译前停止正在运行的进程，避免文件锁定
+Write-Host "  停止旧进程..."
+Get-Process -Name "DfoServer" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name "DfoGmTool" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+
 $distDb = Join-Path $SrcRoot "dist\win-x64\Data\inventory.db"
 $distDbBak = Join-Path $SrcRoot "dist\win-x64\Data\inventory.db.tmpbak"
 if (Test-Path $distDb) { New-Item -ItemType Directory -Path (Split-Path $distDbBak -Parent) -Force | Out-Null; Copy-Item $distDb $distDbBak -Force }
@@ -139,6 +145,15 @@ $gmProj = Join-Path $GmDir "DfoGmTool.csproj"
 if (Test-Path $gmProj) {
     Write-Host "  编译 DfoGmTool.exe ..."
     $pubDir = Join-Path $GmDir "publish"
+    # v1.919: 编译前清理 dfogmtool 目录下的过期 .cs 文件，避免与新版源码中的类型冲突 (CS0101)
+    if ($gmSrc) {
+        Get-ChildItem $GmDir -Recurse -Filter "*.cs" -ErrorAction SilentlyContinue | ForEach-Object {
+            $rel = $_.FullName.Substring($GmDir.Length).TrimStart('\')
+            if ($rel -match '(^|\\)(bin|obj|publish)(\\|$)') { return }
+            $srcPath = Join-Path $gmSrc $rel
+            if (-not (Test-Path $srcPath)) { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+        }
+    }
     & $dn restore $gmProj --ignore-failed-sources 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
         & $dn publish $gmProj -c Release -r win-x64 --self-contained true -o $pubDir 2>&1 | Out-Null
