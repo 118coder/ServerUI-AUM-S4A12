@@ -37,7 +37,7 @@ public class SelfUpdateService
 {
     const string GitHubRaw = "https://raw.githubusercontent.com/118coder/ServerUI-AUM-S4A12/main/";
     const string GitHubApi = "https://api.github.com/repos/118coder/ServerUI-AUM-S4A12/contents/";
-    const string RepoZipUrl = "https://api.github.com/repos/118coder/ServerUI-AUM-S4A12/zipball/main";
+    const string RepoZipUrl = "https://github.com/118coder/ServerUI-AUM-S4A12/archive/refs/heads/main.zip";
     const string VerFile = "AUM-version.txt";
 
     public string RemoteVersion { get; private set; }
