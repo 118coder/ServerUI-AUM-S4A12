@@ -37,7 +37,7 @@ public class SelfUpdateService
 {
     const string GitHubRaw = "https://raw.githubusercontent.com/118coder/ServerUI-AUM-S4A12/main/";
     const string GitHubApi = "https://api.github.com/repos/118coder/ServerUI-AUM-S4A12/contents/";
-    const string RepoZipUrl = "https://api.github.com/repos/118coder/ServerUI-AUM-S4A12/zipball/main";
+    const string RepoZipUrl = "https://github.com/118coder/ServerUI-AUM-S4A12/archive/refs/heads/main.zip";
     const string VerFile = "AUM-version.txt";
 
     public string RemoteVersion { get; private set; }
@@ -616,7 +616,7 @@ public class SelfUpdateService
 
     /// <summary>
     /// 将 .bat 文件中 %~dp0xxx.ps1 或 %BASE%xxx.ps1 更新为 %~dp0ps1核心\xxx.ps1
-    /// 自动检测 GBK/UTF-8 编码，不做编码转换
+    /// v1.919: 从 GitHub 直接覆盖，不做编码转换
     /// </summary>
     static void UpdateBatReference(string batPath)
     {
@@ -624,21 +624,13 @@ public class SelfUpdateService
         {
             var bytes = File.ReadAllBytes(batPath);
 
-            // 先尝试 UTF-8 解码
             var text = Encoding.UTF8.GetString(bytes);
             var hasPs1Ref = text.Contains(".ps1", StringComparison.OrdinalIgnoreCase);
-            var enc = Encoding.UTF8;
 
-            // 如果 UTF-8 下找不到 .ps1 引用，换 GBK 重试
             if (!hasPs1Ref)
-            {
-                text = Encoding.GetEncoding(936).GetString(bytes);
-                hasPs1Ref = text.Contains(".ps1", StringComparison.OrdinalIgnoreCase);
-                if (hasPs1Ref) enc = Encoding.GetEncoding(936);
-            }
+                return;
 
-            // 已包含 ps1核心 或完全不引用 .ps1 → 跳过
-            if (text.Contains("ps1核心") || !hasPs1Ref)
+            if (text.Contains("ps1核心"))
                 return;
 
             text = Regex.Replace(text,
@@ -646,7 +638,7 @@ public class SelfUpdateService
                 "$1" + "ps1核心" + "\\$2",
                 RegexOptions.IgnoreCase);
 
-            File.WriteAllBytes(batPath, enc.GetBytes(text));
+            File.WriteAllBytes(batPath, Encoding.UTF8.GetBytes(text));
         }
         catch { }
     }
