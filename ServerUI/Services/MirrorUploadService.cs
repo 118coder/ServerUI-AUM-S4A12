@@ -404,8 +404,9 @@ public class MirrorUploadService
     {
         try
         {
+            // v1.919: 从 GitGud 主源下载 GM 工具源码（与旧版参考脚本一致）
             var gmUrls = new[] {
-                "https://codeberg.org/rewio/DfoGmTool/archive/main.zip"
+                "https://gitgud.io/api/v4/projects/rewio%2F86JPGMTool/repository/archive.zip?sha=main"
             };
             byte[] gmZip = null;
             foreach (var url in gmUrls)
@@ -414,6 +415,8 @@ public class MirrorUploadService
                 {
                     using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
                     client.DefaultRequestHeaders.Add("User-Agent", "ServerUI-Mirror/1.0");
+                    if (url.Contains("gitgud.io"))
+                        client.DefaultRequestHeaders.Add("PRIVATE-TOKEN", GitGudToken);
                     gmZip = await client.GetByteArrayAsync(url);
                     if (gmZip.Length > 10240) break;
                 }
