@@ -64,6 +64,13 @@ static class Program
             // SystemAware 与 manifest 的 PerMonitorV2 冲突会导致 Win10 上窗口不可见/无响应
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
 
+            // ===== AntdUI 初始化 (v2.0 现代化界面) =====
+            // 文字渲染: 抗锯齿网格对齐, 高分屏下更清晰
+            AntdUI.Localization.DefaultLanguage = "zh-CN";
+            AntdUI.Config.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            AntdUI.Config.TextRenderingHighQuality = true;
+            AntdUI.Config.Theme().Dark("#000", "#fff").Light("#fff", "#000").FormBorderColor();
+
             // 启用 XP 风格的控件外观（让按钮、滚动条等看起来现代一点）
             Application.EnableVisualStyles();
 
