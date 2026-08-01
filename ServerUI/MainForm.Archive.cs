@@ -1,4 +1,4 @@
-﻿/*
+/*
  * ==================================================================
  * MainForm 存档管理部分 (partial class)
  * 包含: 导入/导出/储存/撤销/切换/重命名/清理冗余DB
@@ -26,7 +26,7 @@ public partial class MainForm : AntdUI.Window
     /*
      * 导入存档 (IA) — 选择 ZIP 压缩包，解压覆盖到主存档目录
      */
-    void IA()
+    internal void IA()
     {
         using var d = new OpenFileDialog { Filter = "ZIP|*.zip" };
         if (d.ShowDialog() == DialogResult.OK)
@@ -40,7 +40,7 @@ public partial class MainForm : AntdUI.Window
     /*
      * 导出当前 (EC) — 把当前 DB 存档 + 杂DB 打包为 ZIP
      */
-    void EC()
+    internal void EC()
     {
         using var d = new SaveFileDialog
         {
@@ -57,7 +57,7 @@ public partial class MainForm : AntdUI.Window
     /*
      * 储存当前存档 (SC) — 在切换库中新建文件夹，存储当前所有 inventory* 文件
      */
-    void SC()
+    internal void SC()
     {
         var n = Interaction.InputBox("名称:", "储存当前存档",
             DateTime.Now.ToString("MMdd_HHmm"));
@@ -224,7 +224,7 @@ public partial class MainForm : AntdUI.Window
     /*
      * 清理旧备份 (TB) — 限制备份目录最多保留 MB 个备份文件夹
      */
-    void TB()
+    internal void TB()
     {
         var bd = Path.Combine(_ad, "存档管理", "备份存档");
         if (!Directory.Exists(bd)) return;
@@ -251,7 +251,7 @@ public partial class MainForm : AntdUI.Window
      * 清理冗余 DB 文件 (CleanRedundantDb)
      * 扫描 Data 目录及所有子目录，删除 inventory* 但保留 inventory.db 本身
      */
-    void CleanRedundantDb()
+    internal void CleanRedundantDb()
     {
         try
         {
@@ -283,7 +283,7 @@ public partial class MainForm : AntdUI.Window
     /*
      * 存档操作包装器 (DoArchiveOp) — 服务端运行时阻止存档操作
      */
-    void DoArchiveOp(Func<bool> op)
+    internal void DoArchiveOp(Func<bool> op)
     {
         if (_sv.IsRunning)
         {
@@ -328,7 +328,7 @@ public partial class MainForm : AntdUI.Window
     /*
      * 查看更新日志 (SL) — 用记事本打开 更新日志.txt
      */
-    void SL()
+    internal void SL()
     {
         var lf = Path.Combine(_ad, "更新日志.txt");
         if (File.Exists(lf))

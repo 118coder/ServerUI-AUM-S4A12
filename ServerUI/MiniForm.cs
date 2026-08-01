@@ -39,7 +39,6 @@ public partial class MiniForm : AntdUI.Window
     AntdUI.Label lbStatus, lbPvf, lbInfo;
     AntdUI.Button btPlay, btGm, btUpd, btSave, btUndo, btRefresh, btBack;
     AntdUI.Table lv;
-    AntdUI.Panel dz;
 
     // 配色 (与主窗口一致)
     static readonly Color Gn = Color.FromArgb(40, 167, 69);

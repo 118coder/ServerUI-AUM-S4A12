@@ -1,4 +1,4 @@
-﻿/*
+/*
  * ==================================================================
  * MainForm 服务端控制与更新部分 (partial class)
  * 包含: 定时器 / 窗口关闭清理 / 启动停止 / 日志输出
@@ -265,6 +265,9 @@ public partial class MainForm : AntdUI.Window
             rt.Invoke(new Action(() => Lg(m, c, bold)));
             return;
         }
+        // 经典模式(ClassicForm)激活时, 日志实时转发到经典窗口显示
+        // 主窗口自身的日志记录不受影响, 返回后仍完整可见
+        if (LogHook != null) LogHook(m, c);
         var line = "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + m;
         _logBuilder.AppendLine(line);
         if (rt.TextLength > LogMaxChars) TrimLog(LogKeepChars);
@@ -582,7 +585,7 @@ public partial class MainForm : AntdUI.Window
      * 通过 dotnet-sdk 安装程序自动下载安装 .NET 10 SDK
      * 安装位置: AUM管理组件\dotnet-sdk\
      */
-    async System.Threading.Tasks.Task IS()
+    internal async System.Threading.Tasks.Task IS()
     {
         btSdk.Enabled = false;
         btSdk.Text = "检测中...";
@@ -735,7 +738,7 @@ public partial class MainForm : AntdUI.Window
         finally { _au.OutputReceived -= Lg; }
     }
 
-    async System.Threading.Tasks.Task CheckAndUpdateAUM()
+    internal async System.Threading.Tasks.Task CheckAndUpdateAUM()
     {
         if (!_hasSdk)
         {
@@ -995,7 +998,7 @@ public partial class MainForm : AntdUI.Window
     /*
      * 全量更新 (RF) — 与增量更新流程相同，加上 -FullSync 参数
      */
-    async System.Threading.Tasks.Task RF()
+    internal async System.Threading.Tasks.Task RF()
     {
         if (!await CanUpdate()) return;
         if (_sv.IsRunning)
@@ -1053,6 +1056,7 @@ public partial class MainForm : AntdUI.Window
                 }
                 pb.Value = Math.Min(_pv, 95f) / 100f;
                 lbPg.Text = "更新进度: " + (int)_pv + "%";
+                ProgressHook?.Invoke((int)_pv);     // 转发到经典模式窗口
             }
             return;
         }
@@ -1080,6 +1084,7 @@ public partial class MainForm : AntdUI.Window
             if (_pv < _stepTarget - 8) _pv = _stepTarget - 8;   // 大步跳到阶段附近, 剩余交给蠕动
             pb.Value = Math.Min(_pv, 95f) / 100f;
             lbPg.Text = "更新进度: " + (int)_pv + "%";
+            ProgressHook?.Invoke((int)_pv);     // 转发到经典模式窗口
         }
     }
 
@@ -1090,6 +1095,7 @@ public partial class MainForm : AntdUI.Window
     {
         pb.Value = 1f;   // 100%
         lbPg.Text = "100%";
+        ProgressHook?.Invoke(100);     // 转发到经典模式窗口
         if (ok)
         {
             LS(">>> 更新完成！如果更新没有效果，"
