@@ -510,9 +510,8 @@ public class SelfUpdateService
 
     static void SyncRootFiles(string repoRoot, string userRoot)
     {
-        // .bat / .txt / .md → userRoot (直接在 AUM管理组件 根目录)
-        var extsBat = new[] { "*.bat", "*.txt", "*.md" };
-        foreach (var pattern in extsBat)
+        // .txt / .md → userRoot (UTF-8 文本，直接复制)
+        foreach (var pattern in new[] { "*.txt", "*.md" })
         {
             foreach (var f in Directory.GetFiles(repoRoot, pattern))
             {
@@ -532,6 +531,29 @@ public class SelfUpdateService
                 }
                 File.Copy(f, dest, true);
             }
+        }
+
+        // .bat → userRoot (cmd 按 ANSI/GBK 或 chcp 65001 执行)
+        // 源 .bat 已被 U+FFFD 损坏(锟斤拷)时绝不覆盖本地文件，等仓库修复后再同步
+        foreach (var f in Directory.GetFiles(repoRoot, "*.bat"))
+        {
+            var name = Path.GetFileName(f);
+            if (name.Contains("GameLog") || name.Contains("运行日志") || name.Contains("本地游戏S4")) continue;
+            var dest = Path.Combine(userRoot, name);
+            var srcInfo = new FileInfo(f);
+
+            if (CountFFFD(File.ReadAllBytes(f)) > 0) continue;
+
+            if (File.Exists(dest))
+            {
+                var dstInfo = new FileInfo(dest);
+                if (srcInfo.Length == dstInfo.Length
+                    && srcInfo.LastWriteTimeUtc == dstInfo.LastWriteTimeUtc)
+                    continue;
+                if (FileHash(f) == FileHash(dest))
+                    continue;
+            }
+            File.Copy(f, dest, true);
         }
 
         // .ps1 → userRoot\ps1核心\ (全部放入 ps1核心 子目录)
@@ -614,9 +636,89 @@ public class SelfUpdateService
         catch { }
     }
 
+    // =================================================================
+    // .bat 编码安全工具
+    // cmd.exe 在中文 Windows 默认按 ANSI(GBK) 读取 .bat（带 chcp 65001 的按 UTF-8 读取）。
+    // 任何 "按 UTF-8 解码 → 改写 → 按 UTF-8 写回" 的往返都会把 GBK 文件损坏成 "锟斤拷"，
+    // 因此这里全程按字节操作，绝不进行编码转换。
+    // =================================================================
+
+    // "ps1核心\" 的 GBK 字节（中文 Windows 默认 ANSI 代码页 936）
+    static readonly byte[] CoreDirGbk = { 0x70, 0x73, 0x31, 0xBA, 0xCB, 0xD0, 0xC4, 0x5C };
+    // "ps1核心\" 的 UTF-8 字节（chcp 65001 的 .bat）
+    static readonly byte[] CoreDirUtf8 = { 0x70, 0x73, 0x31, 0xE6, 0xA0, 0xB8, 0xE5, 0xBF, 0x83, 0x5C };
+
+    /// <summary>统计文件中 U+FFFD 替换符(EF BF BD)的数量 — 出现即代表文件已被"锟斤拷"损坏</summary>
+    static int CountFFFD(byte[] bytes)
+    {
+        int n = 0;
+        for (int i = 0; i + 2 < bytes.Length; i++)
+            if (bytes[i] == 0xEF && bytes[i + 1] == 0xBF && bytes[i + 2] == 0xBD)
+                n++;
+        return n;
+    }
+
+    /// <summary>在字节数组中查找 ASCII 子串（大小写不敏感）</summary>
+    static bool ContainsAsciiBytes(byte[] hay, string ascii)
+    {
+        var needle = Encoding.ASCII.GetBytes(ascii);
+        if (needle.Length == 0 || needle.Length > hay.Length) return false;
+        int last = hay.Length - needle.Length;
+        for (int i = 0; i <= last; i++)
+        {
+            bool ok = true;
+            for (int j = 0; j < needle.Length; j++)
+            {
+                var b = hay[i + j];
+                var a = needle[j];
+                if (b >= 0x41 && b <= 0x5A) b |= 0x20;
+                if (a >= 0x41 && a <= 0x5A) a |= 0x20;
+                if (b != a) { ok = false; break; }
+            }
+            if (ok) return true;
+        }
+        return false;
+    }
+
+    /// <summary>在字节数组中查找子串位置，找不到返回 -1</summary>
+    static int IndexOfBytes(byte[] hay, byte[] needle, int start)
+    {
+        if (needle.Length == 0 || needle.Length > hay.Length - start) return -1;
+        int last = hay.Length - needle.Length;
+        for (int i = start; i <= last; i++)
+        {
+            bool ok = true;
+            for (int j = 0; j < needle.Length; j++)
+                if (hay[i + j] != needle[j]) { ok = false; break; }
+            if (ok) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>字节数组是否可在严格 UTF-8 下解码（是 → chcp 65001 的 UTF-8 文件；否 → ANSI/GBK）</summary>
+    static bool IsStrictUtf8(byte[] bytes)
+    {
+        try { new UTF8Encoding(false, true).GetString(bytes); return true; }
+        catch { return false; }
+    }
+
+    /// <summary>判断 .bat 应使用哪种编码插入 "ps1核心\"：UTF-8 或 ANSI(GBK)</summary>
+    static bool UseUtf8ForInsert(byte[] bytes)
+    {
+        // 显式声明 chcp 65001 (UTF-8 代码页) → 按 UTF-8
+        if (ContainsAsciiBytes(bytes, "chcp 65001")) return true;
+        // 含非 ASCII 字节且可严格按 UTF-8 解码 → UTF-8 文件
+        bool hasHigh = false;
+        foreach (var b in bytes)
+            if (b >= 0x80) { hasHigh = true; break; }
+        if (hasHigh) return IsStrictUtf8(bytes);
+        // 纯 ASCII 的 .bat → 中文 Windows 上 cmd 默认按 ANSI(GBK) 执行，按 GBK 处理
+        return false;
+    }
+
     /// <summary>
     /// 将 .bat 文件中 %~dp0xxx.ps1 或 %BASE%xxx.ps1 更新为 %~dp0ps1核心\xxx.ps1
-    /// v1.919: 从 GitHub 直接覆盖，不做编码转换
+    /// v1.920: 改为纯字节操作 — 不再做 UTF-8 解码/写回，GBK 与 UTF-8 两种 .bat 都不会被损坏
     /// </summary>
     static void UpdateBatReference(string batPath)
     {
@@ -624,23 +726,68 @@ public class SelfUpdateService
         {
             var bytes = File.ReadAllBytes(batPath);
 
-            var text = Encoding.UTF8.GetString(bytes);
-            var hasPs1Ref = text.Contains(".ps1", StringComparison.OrdinalIgnoreCase);
+            // 已被 U+FFFD 损坏(锟斤拷)的文件无法恢复，跳过
+            if (CountFFFD(bytes) > 0) return;
 
-            if (!hasPs1Ref)
+            // 不含 .ps1 引用 → 无需处理
+            if (!ContainsAsciiBytes(bytes, ".ps1")) return;
+
+            // 已包含 "ps1核心" 引用(GBK 或 UTF-8 字节序) → 跳过
+            if (IndexOfBytes(bytes, CoreDirGbk, 0) >= 0
+                || IndexOfBytes(bytes, CoreDirUtf8, 0) >= 0)
                 return;
 
-            if (text.Contains("ps1核心"))
-                return;
+            // 判断编码: chcp 65001 / 非 ASCII 且严格 UTF-8 → 按 UTF-8 插入; 否则按 ANSI(GBK) 插入
+            var core = UseUtf8ForInsert(bytes) ? CoreDirUtf8 : CoreDirGbk;
 
-            text = Regex.Replace(text,
-                @"(%~dp0|%BASE%)([^""'\\\s]+?\.ps1)",
-                "$1" + "ps1核心" + "\\$2",
-                RegexOptions.IgnoreCase);
+            // 在 %~dp0 / %BASE% 标记之后插入 "ps1核心\"（处理全部匹配，与旧正则行为一致）
+            var result = new System.Collections.Generic.List<byte>(bytes.Length + 32);
+            result.AddRange(bytes);
+            int inserted = 0;
+            for (int i = 0; i + 4 < bytes.Length; i++)
+            {
+                bool dp0 = ContainsAsciiBytesAt(bytes, i, "%~dp0");
+                bool baseMark = ContainsAsciiBytesAt(bytes, i, "%BASE%");
+                if (!dp0 && !baseMark) continue;
 
-            File.WriteAllBytes(batPath, Encoding.UTF8.GetBytes(text));
+                int markEnd = dp0 ? i + 5 : i + 6;
+
+                // 标记之后到 .ps1 之间不得出现引号/反斜杠/空白（与旧正则 [^"'\\\s] 一致）
+                int ps1 = -1;
+                bool clean = true;
+                for (int j = markEnd; j + 4 <= bytes.Length; j++)
+                {
+                    if (bytes[j] == '.' && bytes[j + 1] == 'p'
+                        && bytes[j + 2] == 's' && bytes[j + 3] == '1')
+                    { ps1 = j; break; }
+                    var b = bytes[j];
+                    if (b == '"' || b == '\'' || b == '\\' || b == ' '
+                        || b == '\t' || b == '\r' || b == '\n' || b == '\f' || b == '\v')
+                    { clean = false; break; }
+                }
+                if (!clean || ps1 < 0) continue;
+
+                result.InsertRange(markEnd + inserted, core);
+                inserted += core.Length;
+            }
+            File.WriteAllBytes(batPath, result.ToArray());
         }
         catch { }
+    }
+
+    /// <summary>判断字节数组指定位置是否匹配 ASCII 子串（大小写不敏感）</summary>
+    static bool ContainsAsciiBytesAt(byte[] bytes, int i, string ascii)
+    {
+        if (i + ascii.Length > bytes.Length) return false;
+        for (int j = 0; j < ascii.Length; j++)
+        {
+            var b = bytes[i + j];
+            var a = (byte)ascii[j];
+            if (b >= 0x41 && b <= 0x5A) b |= 0x20;
+            if (a >= 0x41 && a <= 0x5A) a |= 0x20;
+            if (b != a) return false;
+        }
+        return true;
     }
 
     static string FileHash(string path)
