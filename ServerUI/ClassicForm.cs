@@ -90,7 +90,11 @@ public partial class ClassicForm : AntdUI.Window
 
         try { if (_main.Icon != null) Icon = _main.Icon; } catch { }
 
+        // 构建期间挂起布局, 减少重复布局开销; 双缓冲减少重绘闪烁
+        SuspendLayout();
         BuildUi();
+        ResumeLayout(true);
+        EnableDoubleBuffer(this);
 
         _st = new Timer { Interval = 2000 };
         _st.Tick += (s, e) => RefreshStatus();
@@ -98,6 +102,22 @@ public partial class ClassicForm : AntdUI.Window
         RefreshStatus();
         RefreshArchives();
         Lg(">>> 已进入经典模式(旧版一站式布局)。点右上角【返回新界面】可回到新版界面。", Gold);
+    }
+
+    /*
+     * 递归启用双缓冲 (TableLayoutPanel / Panel 防闪烁)
+     */
+    static void EnableDoubleBuffer(Control root)
+    {
+        var prop = typeof(Control).GetProperty("DoubleBuffered",
+            System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.NonPublic);
+        foreach (Control c in root.Controls)
+        {
+            if (c is TableLayoutPanel || c is System.Windows.Forms.Panel || c is FlowLayoutPanel)
+                try { prop?.SetValue(c, true); } catch { }
+            EnableDoubleBuffer(c);
+        }
     }
 
     /*
@@ -614,6 +634,7 @@ public partial class ClassicForm : AntdUI.Window
         lv.Columns = new ColumnCollection
         {
             new Column("Name", "存档名称 (双击切换 · 右键更多)") { Ellipsis = true },
+            new Column("Size", "大小") { Width = "90", Align = ColumnAlign.Right },
             new Column("Modified", "修改时间") { Width = "150", Align = ColumnAlign.Center },
         };
         // ★ AntdUI 双击只触发 CellDoubleClick, 不会触发 CellClick
@@ -829,9 +850,10 @@ public partial class ClassicForm : AntdUI.Window
         {
             var dt = new DataTable();
             dt.Columns.Add("Name", typeof(string));
+            dt.Columns.Add("Size", typeof(string));
             dt.Columns.Add("Modified", typeof(string));
             foreach (var a in _main._ar.List(_main._ad).OrderByDescending(x => x.Modified))
-                dt.Rows.Add(a.Name, a.Modified.ToString("yyyy-MM-dd HH:mm"));
+                dt.Rows.Add(a.Name, a.SizeDisplay, a.Modified.ToString("yyyy-MM-dd HH:mm"));
             lv.DataSource = dt;
 
             lbCu.Text = "当前: " + _main._ar.CurrentInfo(_main._ad);
