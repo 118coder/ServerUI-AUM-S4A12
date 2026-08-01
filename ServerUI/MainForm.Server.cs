@@ -252,11 +252,17 @@ public partial class MainForm : AntdUI.Window
     const int LogKeepChars = 150_000;
 
     internal void Lg(string m) => Lg(m, Color.FromArgb(240, 240, 245));
-    internal void Lg(string m, Color c)
+    internal void Lg(string m, Color c) => Lg(m, c, false);
+
+    /*
+     * 日志输出 (Lg) — 格式 [HH:mm:ss] 消息内容，线程安全
+     * bold=true 时以粗体输出 (用于醒目警告)
+     */
+    internal void Lg(string m, Color c, bool bold)
     {
         if (rt.InvokeRequired)
         {
-            rt.Invoke(new Action(() => Lg(m, c)));
+            rt.Invoke(new Action(() => Lg(m, c, bold)));
             return;
         }
         var line = "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + m;
@@ -264,8 +270,10 @@ public partial class MainForm : AntdUI.Window
         if (rt.TextLength > LogMaxChars) TrimLog(LogKeepChars);
         rt.SelectionStart = rt.TextLength;
         rt.SelectionLength = 0;
+        rt.SelectionFont = rt.Font;
         rt.SelectionColor = Color.FromArgb(240, 240, 245);
         rt.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] ");
+        if (bold) rt.SelectionFont = new Font(rt.Font, FontStyle.Bold);
         rt.SelectionColor = c;
         rt.AppendText(m + "\n");
         rt.ScrollToCaret();
@@ -623,7 +631,9 @@ public partial class MainForm : AntdUI.Window
     {
         var dnfPath = Path.Combine(_gr, "DNF.exe");
         if (!File.Exists(dnfPath))
-            Lg("[警告] 本目录下并不存在 DNF.exe，请确认解压位置是否正确。当前目录: " + _gr, Or);
+            // 极其醒目的亮红 + 加粗 (深色日志底上 #FF0000 最醒目)
+            Lg("[警告] 本目录下并不存在 DNF.exe，请确认解压位置是否正确。当前目录: " + _gr,
+                Color.FromArgb(255, 0, 0), bold: true);
         else
             Lg("[检查] DNF.exe 已找到: " + dnfPath, Gn);
     }
