@@ -60,7 +60,7 @@ public partial class MainForm : AntdUI.Window
     const int MB = 10;
 
     // VER = 当前工具版本号 — 显示在窗口标题和启动日志中
-    const string VER = "2.0";
+    const string VER = "2.01";
 
     // ===== 路径计算 =====
     readonly string _bd = AppDomain.CurrentDomain.BaseDirectory;
@@ -223,6 +223,7 @@ public partial class MainForm : AntdUI.Window
         {
             if (_helpFlow != null)
                 _helpFlow.BackColor = Style.Get(Colour.BgContainer);
+            TshThemeSync();
             ApplyButtonsColor(this);
             if (_miniForm != null && !_miniForm.IsDisposed)
                 ApplyButtonsColor(_miniForm);
@@ -598,6 +599,7 @@ public partial class MainForm : AntdUI.Window
         mn.Items.Add(new AntdUI.MenuItem { Text = "存档管理",  IconSvg = "DatabaseOutlined",       Tag = "archive" });
         mn.Items.Add(new AntdUI.MenuItem { Text = "设置与关于", IconSvg = "SettingOutlined",        Tag = "about" });
         mn.Items.Add(new AntdUI.MenuItem { Text = "使用说明",   IconSvg = "QuestionCircleOutlined", Tag = "help" });
+        mn.Items.Add(new AntdUI.MenuItem { Text = "疑难杂症解惑", IconSvg = "BulbOutlined",         Tag = "tsh" });
         mn.SelectChanged += (s, e) =>
         {
             var tag = (e.Value?.Tag as string) ?? "";
@@ -614,16 +616,19 @@ public partial class MainForm : AntdUI.Window
         pgArc  = new AntdUI.Panel   { Dock = DockStyle.Fill, Visible = false };
         pgUpd  = new AntdUI.In.Panel { Dock = DockStyle.Fill, AutoScroll = true, Visible = false };
         pgHelp = new AntdUI.In.Panel { Dock = DockStyle.Fill, AutoScroll = true, Visible = false };
+        pgTsh  = new AntdUI.In.Panel { Dock = DockStyle.Fill, AutoScroll = true, Visible = false };
         contentCard.Controls.Add(pgDash);
         contentCard.Controls.Add(pgArc);
         contentCard.Controls.Add(pgUpd);
         contentCard.Controls.Add(pgHelp);
+        contentCard.Controls.Add(pgTsh);
         main.Controls.Add(contentCard, 1, 0);
 
         BuildDash();
         BuildArchive();
         BuildAbout();
         BuildHelp();
+        BuildTroubleshoot();
         BuildLog();
 
         // 运行方式默认不勾选任何 DX 选项 (无选中 = 默认 DX9 运行)
@@ -649,9 +654,11 @@ public partial class MainForm : AntdUI.Window
             pgArc.Size = cs;
             pgUpd.Size = cs;
             pgDash.Size = cs;
+            pgTsh.Size = cs;
             pgArc.PerformLayout();
             pgUpd.PerformLayout();
             pgDash.PerformLayout();
+            pgTsh.PerformLayout();
         }
         catch { }
     }
@@ -667,11 +674,12 @@ public partial class MainForm : AntdUI.Window
             "archive" => (Control)pgArc,
             "about" => (Control)pgUpd,
             "help" => (Control)pgHelp,
+            "tsh" => (Control)pgTsh,
             _ => (Control)pgDash
         };
 
         SuspendLayout();
-        foreach (var c in new Control[] { pgDash, pgArc, pgUpd, pgHelp })
+        foreach (var c in new Control[] { pgDash, pgArc, pgUpd, pgHelp, pgTsh })
         {
             bool show = c == target;
             if (c.Visible != show)

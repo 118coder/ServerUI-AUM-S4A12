@@ -814,6 +814,7 @@ public partial class MainForm : AntdUI.Window
         if (await _mu.CanReachGitGud())
         {
             Lg("[镜像] 检测到可访问 GitGud，尝试同步镜像...", Color.FromArgb(176, 176, 184));
+            Lg("您已进入上传者模式，系统将通过众包镜像将最新包体分发至仓库，以缓解主源仓库的访问压力，帮助网络不佳的用户~您的等待将直接缩短他人的下载时长——愿这份互助，传递温暖。", Gold);
             _mu.OutputReceived += Lg;
             try
             {

@@ -333,7 +333,8 @@ public partial class MiniForm : AntdUI.Window
             new Column("Name", "存档名称") { Ellipsis = true },
             new Column("Modified", "修改时间") { Width = "120", Align = ColumnAlign.Center },
         };
-        lv.CellClick += Lv_CellClick;
+        // ★ AntdUI 双击只会触发 CellDoubleClick, 不会触发 CellClick
+        lv.CellDoubleClick += Lv_CellClick;
         root.Controls.Add(lv, 0, 5);
 
         // ===== 提示行 =====
@@ -396,12 +397,13 @@ public partial class MiniForm : AntdUI.Window
     }
 
     /*
-     * 存档列表点击 — 左键双击切换存档
+     * 存档列表双击 — 左键双击切换存档
+     * 挂在 CellDoubleClick 上 (AntdUI 双击不触发 CellClick)
      */
     void Lv_CellClick(object s, TableClickEventArgs e)
     {
         if (!(e.Record is DataRow row)) return;
-        if (e.Button != MouseButtons.Left || e.Clicks != 2) return;
+        if (e.Button != MouseButtons.Left) return;
         if (!CheckServer()) return;
 
         var nm = Convert.ToString(row["Name"]);

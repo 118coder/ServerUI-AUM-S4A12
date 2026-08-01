@@ -594,7 +594,10 @@ public partial class MainForm : AntdUI.Window
             new Column("Size", "大小") { Width = "90", Align = ColumnAlign.Right },
             new Column("Modified", "修改时间 (点此排序)") { Width = "150", Align = ColumnAlign.Center },
         };
-        lv.CellClick += Lv_CellClick;
+        // ★ 关键: AntdUI 的 Table 双击只会触发 CellDoubleClick 事件,
+        //    不会触发 CellClick (双击时 CellClick 被 AntdUI 内部吞掉),
+        //    因此切换存档必须挂在 CellDoubleClick 上
+        lv.CellDoubleClick += Lv_CellDoubleClick;
         lv.CellClickBegin += Lv_CellClickBegin;
         ag.Controls.Add(lv, 0, 3);
 
