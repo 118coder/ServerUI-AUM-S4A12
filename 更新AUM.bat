@@ -1,4 +1,5 @@
 @echo off
 title AUM-Manager-SelfUpdate
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ps1核心\更新AUM.ps1"
+cd /d "%~dp0"
+powershell -NoProfile -ExecutionPolicy Bypass -File "ps1核心\更新AUM.ps1"
 pause
