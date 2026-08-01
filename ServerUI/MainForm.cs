@@ -60,7 +60,7 @@ public partial class MainForm : AntdUI.Window
     const int MB = 10;
 
     // VER = 当前工具版本号 — 显示在窗口标题和启动日志中
-    const string VER = "2.01";
+    internal const string VER = "2.01";
 
     // ===== 路径计算 =====
     readonly string _bd = AppDomain.CurrentDomain.BaseDirectory;
@@ -132,10 +132,15 @@ public partial class MainForm : AntdUI.Window
     bool _logCollapsed;                   // 日志条是否折叠
     bool _dxReady;                        // DX 分段选择器是否已完成初始化
     MiniForm _miniForm;                   // 极简模式窗口 (独立小窗口)
+    ClassicForm _classicForm;             // 经典模式窗口 (旧版一站式布局)
     float _fadeV = 1f;                    // 窗口拉伸过渡动画进度 (0-1)
     Timer _fadeTimer;                     // 过渡动画定时器
     AntdUI.Panel _contentCard;            // 内容卡片 (过渡动画作用对象)
     readonly StringBuilder _logBuilder = new();  // 累积全部运行日志
+
+    // ===== 经典模式转发钩子 (由 ClassicForm 挂接, 不影响主窗口自身) =====
+    internal Action<string, Color> LogHook;     // 日志实时转发到经典模式窗口
+    internal Action<int> ProgressHook;          // 更新进度转发到经典模式窗口
 
     /*
      * 构造函数 — 程序启动时执行一次，完成所有初始化工作
@@ -227,6 +232,8 @@ public partial class MainForm : AntdUI.Window
             ApplyButtonsColor(this);
             if (_miniForm != null && !_miniForm.IsDisposed)
                 ApplyButtonsColor(_miniForm);
+            if (_classicForm != null && !_classicForm.IsDisposed)
+                ApplyButtonsColor(_classicForm);
         }
         catch { }
     }
@@ -275,14 +282,30 @@ public partial class MainForm : AntdUI.Window
     }
 
     /*
-     * 返回完整模式 (BackToFullMode) — 由极简窗口调用
-     * 只隐藏极简窗口, 不 Close (避免 FormClosing 递归)
+     * 打开经典模式 (OpenClassicMode)
+     * 经典模式 = 独立窗口 (ClassicForm.cs), 采用旧版一站式布局:
+     * 左侧服务控制/更新管理 + 右侧存档管理 + 底部运行日志
+     * 日志与更新进度通过 LogHook / ProgressHook 实时转发到经典窗口
+     */
+    void OpenClassicMode()
+    {
+        if (_classicForm == null || _classicForm.IsDisposed)
+            _classicForm = new ClassicForm(this);
+        Hide();
+        _classicForm.Show();
+    }
+
+    /*
+     * 返回完整模式 (BackToFullMode) — 由极简/经典窗口调用
+     * 只隐藏子窗口, 不 Close (避免 FormClosing 递归)
      */
     internal void BackToFullMode()
     {
         Show();
         if (_miniForm != null && !_miniForm.IsDisposed)
             _miniForm.Hide();
+        if (_classicForm != null && !_classicForm.IsDisposed)
+            _classicForm.Hide();
     }
 
     /*
@@ -544,6 +567,20 @@ public partial class MainForm : AntdUI.Window
             OnThemeChanged();
         };
 
+        // 经典模式切换按钮 (旧版一站式布局) — 位于【简】左边
+        var btCla = new AntdUI.Button
+        {
+            Dock = DockStyle.Right,
+            Width = 44,
+            Ghost = true,
+            Radius = 0,
+            WaveSize = 0,
+            Text = "典",
+            Font = new Font("Microsoft YaHei UI", 10f, FontStyle.Bold),
+            Cursor = Cursors.Hand
+        };
+        btCla.Click += (s, e) => OpenClassicMode();
+
         // 极简模式切换按钮 (打开独立的小窗口) — 位于明暗主题切换按钮左边
         btSize = new AntdUI.Button
         {
@@ -566,6 +603,7 @@ public partial class MainForm : AntdUI.Window
             Width = 3,
             BackColor = Color.Transparent
         });
+        hd.Controls.Add(btCla);
         hd.Controls.Add(btSize);
         hd.Controls.Add(btTheme);
         _root.Controls.Add(hd, 0, 0);
