@@ -183,8 +183,11 @@ public partial class MainForm : AntdUI.Window
         // 双缓冲 — 减少容器重绘闪烁/残影 (TableLayoutPanel 等默认无双缓冲)
         EnableDoubleBuffer(this);
 
+        // 预创建经典模式窗口 — 把构建开销移到启动阶段, 点【典】时即时显示不卡顿
+        try { _classicForm = new ClassicForm(this); } catch { }
+
         // Load 事件中执行: 系统检测 / 状态刷新 / 网络检测 / AUM 自检
-        Load += async (s, e) => { Ck(); Rf(); CheckDnfExists(); await CheckBasicNetwork(); await CheckAUMUpdate(); };
+        Load += async (s, e) => { PreLayoutClassic(); Ck(); Rf(); CheckDnfExists(); await CheckBasicNetwork(); await CheckAUMUpdate(); };
     }
 
     /*
@@ -266,6 +269,20 @@ public partial class MainForm : AntdUI.Window
         TTypeMini.Info    => Color.FromArgb(0, 188, 212),      // 青 Cyan-500    #00BCD4
         _ => null
     };
+
+    /*
+     * 经典模式预布局 (PreLayoutClassic) — 启动时强制创建句柄并完成全部布局,
+     * 点击【典】切换时窗口已完全就绪, 即时显示不卡顿
+     */
+    void PreLayoutClassic()
+    {
+        try
+        {
+            if (_classicForm != null && !_classicForm.IsDisposed)
+                _classicForm.CreateControl();
+        }
+        catch { }
+    }
 
     /*
      * 打开极简模式 (OpenMiniMode)
