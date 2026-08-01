@@ -70,17 +70,19 @@ public partial class MainForm : AntdUI.Window
     }
 
     /*
-     * 存档表格点击 (Lv_CellClick)
-     * 左键双击 → 切换存档   点"修改时间"列头 → 切换排序方向
+     * 存档表格双击 (Lv_CellDoubleClick) — 左键双击 → 切换存档
+     * 注意: 必须挂在 Table.CellDoubleClick 事件上!
+     *       AntdUI 的 Table 在双击时只触发 CellDoubleClick,
+     *       不会触发 CellClick (Clicks==2 的 CellClick 永远收不到),
+     *       旧代码挂在 CellClick 上判断 e.Clicks==2 导致双击无效
      */
-    void Lv_CellClick(object s, TableClickEventArgs e)
+    void Lv_CellDoubleClick(object s, TableClickEventArgs e)
     {
-        // 列头点击: "修改时间" 列切换排序方向
         if (!(e.Record is DataRow row)) return;
 
         var nm = Convert.ToString(row["Name"]);
 
-        if (e.Button == MouseButtons.Left && e.Clicks == 2 && !string.IsNullOrEmpty(nm))
+        if (e.Button == MouseButtons.Left && !string.IsNullOrEmpty(nm))
         {
             var path = Path.Combine(_ad, "存档管理", "切换库", nm);
             DoArchiveOp(() =>
