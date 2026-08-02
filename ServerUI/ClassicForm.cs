@@ -19,6 +19,7 @@
  * ==================================================================
  */
 using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
 using System.Drawing;
@@ -35,7 +36,10 @@ namespace ServerUI;
 public partial class ClassicForm : AntdUI.Window
 {
     readonly MainForm _main;
-    readonly Timer _st;
+
+    // 日志攒批渲染: 入队由 30ms 定时器统一渲染, 跨线程不逐行封送
+    readonly System.Collections.Generic.Queue<(string m, Color c)> _logQueue = new();
+    Timer _logFlush;
 
     // 配色 (与主窗口一致)
     static readonly Color Gn   = Color.FromArgb(40, 167, 69);
@@ -96,13 +100,21 @@ public partial class ClassicForm : AntdUI.Window
         ResumeLayout(true);
         EnableDoubleBuffer(this);
 
-        _st = new Timer { Interval = 2000 };
-        _st.Tick += (s, e) => RefreshStatus();
-        _st.Start();
+        // 日志攒批渲染定时器 (30ms)
+        _logFlush = new Timer { Interval = 30 };
+        _logFlush.Tick += (s, e) => FlushLog();
+        _logFlush.Start();
+
         RefreshStatus();
         RefreshArchives();
         Lg(">>> 已进入经典模式(旧版一站式布局)。点右上角【返回新界面】可回到新版界面。", Gold);
     }
+
+    /*
+     * 由主窗口状态刷新广播调用 (每 2 秒) — 复用主窗口的检测结果,
+     * 不再独立轮询进程/文件, 减少磁盘 IO 与进程枚举
+     */
+    internal void OnMainTick() => RefreshStatus();
 
     /*
      * 递归启用双缓冲 (TableLayoutPanel / Panel 防闪烁)
@@ -769,19 +781,43 @@ public partial class ClassicForm : AntdUI.Window
     }
 
     // =================================================================
-    // 日志输出
+    // 日志输出 (攒批渲染, 线程安全)
     // =================================================================
     void Lg(string m) => Lg(m, Color.FromArgb(240, 240, 245));
     void Lg(string m, Color c)
     {
         if (rt == null || rt.IsDisposed) return;
-        if (rt.InvokeRequired)
+        lock (_logQueue) _logQueue.Enqueue((m, c));
+    }
+
+    /*
+     * 日志批量渲染 (FlushLog) — 由 30ms 定时器在 UI 线程执行
+     * 仅底部时自动跟随; 超限按字符裁剪 (保留最近部分, 不丢格式)
+     */
+    void FlushLog()
+    {
+        if (rt == null || rt.IsDisposed) return;
+        List<(string m, Color c)> batch;
+        lock (_logQueue)
         {
-            rt.Invoke(new Action(() => Lg(m, c)));
-            return;
+            if (_logQueue.Count == 0) return;
+            batch = new List<(string, Color)>(_logQueue);
+            _logQueue.Clear();
         }
+
+        bool follow = IsLogAtBottom();
         try
         {
+            foreach (var (m, c) in batch)
+            {
+                var ts = "[" + DateTime.Now.ToString("HH:mm:ss") + "] ";
+                rt.SelectionStart = rt.TextLength;
+                rt.SelectionLength = 0;
+                rt.SelectionColor = Color.FromArgb(240, 240, 245);
+                rt.AppendText(ts);
+                rt.SelectionColor = c;
+                rt.AppendText(m + "\n");
+            }
             if (rt.TextLength > LogMaxChars)
             {
                 var cut = rt.TextLength - LogKeepChars;
@@ -793,16 +829,23 @@ public partial class ClassicForm : AntdUI.Window
                     rt.ReadOnly = true;
                 }
             }
-            var line = "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + m + "\n";
-            rt.SelectionStart = rt.TextLength;
-            rt.SelectionLength = 0;
-            rt.SelectionColor = Color.FromArgb(240, 240, 245);
-            rt.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] ");
-            rt.SelectionColor = c;
-            rt.AppendText(m + "\n");
-            rt.ScrollToCaret();
+            if (follow) rt.ScrollToCaret();
         }
         catch { }
+    }
+
+    /*
+     * 判断日志滚动条是否位于底部 — 用户上翻查看历史时不抢滚
+     */
+    bool IsLogAtBottom()
+    {
+        if (rt == null || rt.TextLength == 0) return true;
+        try
+        {
+            var pos = rt.GetPositionFromCharIndex(rt.TextLength - 1);
+            return pos.Y >= 0 && pos.Y < rt.ClientSize.Height - 8;
+        }
+        catch { return true; }
     }
 
     // =================================================================
@@ -823,10 +866,10 @@ public partial class ClassicForm : AntdUI.Window
 
             lbVe.Text = "版本: v" + _main._up.GetVersion(_main._ad);
 
-            var vf = Path.Combine(_main._ad, "更新日志.txt");
-            if (File.Exists(vf))
+            // 走缓存读取 (主窗口与经典窗口共用, 避免重复 IO)
+            var tx = _main._up.GetLogText(_main._ad);
+            if (tx.Length > 0)
             {
-                var tx = File.ReadAllText(vf, System.Text.Encoding.UTF8);
                 var ix = tx.LastIndexOf("版本:");
                 if (ix >= 0)
                 {

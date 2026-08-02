@@ -73,6 +73,11 @@ public partial class MainForm : AntdUI.Window
         _st = new Timer { Interval = 2000 };
         _st.Tick += (s, e) => Rs();
         _st.Start();
+
+        // 日志攒批渲染定时器 (30ms): UI 线程统一刷新日志, 避免逐行封送/重绘
+        _logFlush = new Timer { Interval = 30 };
+        _logFlush.Tick += (s, e) => FlushLog();
+        _logFlush.Start();
     }
 
     // =================================================================
@@ -99,6 +104,7 @@ public partial class MainForm : AntdUI.Window
             }
             catch { }
             _st.Stop(); _pt.Stop(); _ct.Stop();
+            if (_logFlush != null) { _logFlush.Stop(); FlushLog(); }
             Lg(">>> 已清理所有进程", Gn);
 
             SaveRunningLog();
@@ -244,9 +250,9 @@ public partial class MainForm : AntdUI.Window
     }
 
     /*
-     * 日志输出 (Lg) — 格式 [HH:mm:ss] 消息内容，线程安全
-     * 日志上限 20 万字符, 超出后保留最近 15 万字符 —
-     * 防止 RichTextBox 内容无限增长, 窗口拉伸时全文重排版导致卡顿
+     * 日志输出 (Lg) — [HH:mm:ss] 消息内容，线程安全
+     * v2.02 优化: 只做线程安全入队, 渲染交给 UI 线程的 FlushLog 定时器,
+     * 跨线程调用不再逐行 Invoke 封送, 更新/镜像大量输出时窗口不卡顿
      */
     const int LogMaxChars = 200_000;
     const int LogKeepChars = 150_000;
@@ -255,31 +261,68 @@ public partial class MainForm : AntdUI.Window
     internal void Lg(string m, Color c) => Lg(m, c, false);
 
     /*
-     * 日志输出 (Lg) — 格式 [HH:mm:ss] 消息内容，线程安全
-     * bold=true 时以粗体输出 (用于醒目警告)
+     * 日志输出 (Lg) — 线程安全入队, 不做任何 UI 操作
+     * 经典模式(ClassicForm)激活时日志实时转发到经典窗口 (其内部自行封送)
      */
     internal void Lg(string m, Color c, bool bold)
     {
-        if (rt.InvokeRequired)
+        lock (_logQueue) _logQueue.Enqueue((m, c, bold));
+        if (LogHook != null)
         {
-            rt.Invoke(new Action(() => Lg(m, c, bold)));
-            return;
+            try { LogHook(m, c); } catch { }
         }
-        // 经典模式(ClassicForm)激活时, 日志实时转发到经典窗口显示
-        // 主窗口自身的日志记录不受影响, 返回后仍完整可见
-        if (LogHook != null) LogHook(m, c);
-        var line = "[" + DateTime.Now.ToString("HH:mm:ss") + "] " + m;
-        _logBuilder.AppendLine(line);
-        if (rt.TextLength > LogMaxChars) TrimLog(LogKeepChars);
-        rt.SelectionStart = rt.TextLength;
-        rt.SelectionLength = 0;
-        rt.SelectionFont = rt.Font;
-        rt.SelectionColor = Color.FromArgb(240, 240, 245);
-        rt.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] ");
-        if (bold) rt.SelectionFont = new Font(rt.Font, FontStyle.Bold);
-        rt.SelectionColor = c;
-        rt.AppendText(m + "\n");
-        rt.ScrollToCaret();
+    }
+
+    /*
+     * 日志批量渲染 (FlushLog) — 由 30ms 定时器在 UI 线程执行
+     * 一次批处理内连续 AppendText 合并为单次绘制; 仅底部时自动跟随
+     */
+    void FlushLog()
+    {
+        if (rt == null || rt.IsDisposed) return;
+        List<(string m, Color c, bool bold)> batch;
+        lock (_logQueue)
+        {
+            if (_logQueue.Count == 0) return;
+            batch = new List<(string, Color, bool)>(_logQueue);
+            _logQueue.Clear();
+        }
+
+        bool follow = IsLogAtBottom();
+        try
+        {
+            foreach (var (m, c, bold) in batch)
+            {
+                var ts = "[" + DateTime.Now.ToString("HH:mm:ss") + "] ";
+                _logBuilder.AppendLine(ts + m);
+                rt.SelectionStart = rt.TextLength;
+                rt.SelectionLength = 0;
+                rt.SelectionFont = rt.Font;
+                rt.SelectionColor = Color.FromArgb(240, 240, 245);
+                rt.AppendText(ts);
+                if (bold) rt.SelectionFont = new Font(rt.Font, FontStyle.Bold);
+                rt.SelectionColor = c;
+                rt.AppendText(m + "\n");
+            }
+            if (rt.TextLength > LogMaxChars) TrimLog(LogKeepChars);
+            if (follow) rt.ScrollToCaret();
+        }
+        catch { }
+    }
+
+    /*
+     * 判断日志滚动条是否位于底部 (IsLogAtBottom)
+     * 最后一行字符在可视区内 → 位于底部, 可自动跟随
+     */
+    bool IsLogAtBottom()
+    {
+        if (rt == null || rt.TextLength == 0) return true;
+        try
+        {
+            var pos = rt.GetPositionFromCharIndex(rt.TextLength - 1);
+            return pos.Y >= 0 && pos.Y < rt.ClientSize.Height - 8;
+        }
+        catch { return true; }
     }
 
     /*
@@ -909,12 +952,11 @@ public partial class MainForm : AntdUI.Window
         lbPv.Text = pvfOk ? "● 已加载" : "● 未找到";
         lbPv.ForeColor = pvfOk ? Gn : Rd;
 
-        // 更新版本信息 (从更新日志.txt 读取最新版本)
+        // 更新版本信息 (从更新日志.txt 读取最新版本, 走缓存避免重复 IO)
         var vf = Path.Combine(_ad, "更新日志.txt");
-        if (File.Exists(vf))
+        var tx = _up.GetLogText(_ad);
+        if (tx.Length > 0)
         {
-            var tx = File.ReadAllText(vf,
-                System.Text.Encoding.UTF8);
             var ix = tx.LastIndexOf("版本:");
             if (ix >= 0)
             {
@@ -933,6 +975,14 @@ public partial class MainForm : AntdUI.Window
             SetLuDefault();
 
         lbVe.Text = "v" + _up.GetVersion(_ad);
+
+        // 广播刷新 — 极简/经典模式窗口复用本次状态检测结果, 不再各自轮询
+        try
+        {
+            if (_miniForm != null && _miniForm.Visible) _miniForm.OnMainTick();
+            if (_classicForm != null && _classicForm.Visible) _classicForm.OnMainTick();
+        }
+        catch { }
     }
 
     void SetLuDefault()
@@ -956,6 +1006,8 @@ public partial class MainForm : AntdUI.Window
      */
     internal async System.Threading.Tasks.Task RI()
     {
+        // v2.02: 更新时自动执行安全DLL安装 (已安装过则跳过)
+        InstallSecurityDll();
         if (!await CanUpdate()) return;
         _ = TryMirrorUpload();
         if (_sv.IsRunning)
@@ -998,8 +1050,10 @@ public partial class MainForm : AntdUI.Window
     /*
      * 全量更新 (RF) — 与增量更新流程相同，加上 -FullSync 参数
      */
-    internal async System.Threading.Tasks.Task RF()
+    internal     async System.Threading.Tasks.Task RF()
     {
+        // v2.02: 更新时自动执行安全DLL安装 (已安装过则跳过)
+        InstallSecurityDll();
         if (!await CanUpdate()) return;
         if (_sv.IsRunning)
         {

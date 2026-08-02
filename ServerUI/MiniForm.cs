@@ -33,7 +33,6 @@ namespace ServerUI;
 public partial class MiniForm : AntdUI.Window
 {
     readonly MainForm _main;
-    readonly Timer _st;
 
     // UI 控件
     AntdUI.Label lbStatus, lbPvf, lbInfo;
@@ -71,13 +70,15 @@ public partial class MiniForm : AntdUI.Window
 
         BuildUi();
 
-        // 状态刷新定时器 (每 2 秒)
-        _st = new Timer { Interval = 2000 };
-        _st.Tick += (s, e) => RefreshStatus();
-        _st.Start();
+        // 状态刷新由主窗口每 2 秒广播 (OnMainTick), 不再独立轮询
         RefreshStatus();
         RefreshArchives();
     }
+
+    /*
+     * 由主窗口状态刷新广播调用 — 复用主窗口检测结果, 减少进程枚举与磁盘 IO
+     */
+    internal void OnMainTick() => RefreshStatus();
 
     /*
      * 构建极简界面 — 紧凑的单列布局
