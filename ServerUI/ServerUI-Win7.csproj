@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- Win7 兼容版: .NET Framework 4.8 (Win7 SP1 最高可运行版本) -->
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>ServerUI-Win7</AssemblyName>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <Version>2.0.2</Version>
+    <AssemblyVersion>2.0.2.0</AssemblyVersion>
+    <FileVersion>2.0.2.0</FileVersion>
+    <InformationalVersion>2.02-V</InformationalVersion>
+    <ApplicationIcon>图标EXE.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- .NET Framework 4.8 需显式引用的框架程序集 -->
+    <Reference Include="Microsoft.VisualBasic" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="AntdUI" Version="2.4.3" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+    <!-- Costura.Fody: 将依赖 DLL 全部嵌入 ServerUI-Win7.exe, 部署只需一个 exe -->
+    <PackageReference Include="Costura.Fody" Version="5.7.0" />
+    <PackageReference Include="Fody" Version="6.8.2" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      ═══════════════════════════════════════════════════════════════════
+      【共享主源码】— 与主版本 (net10) 共用同一套源码, 避免两套源码冲突
+      修改主源码任意文件 → 两个版本同时生效; 差异仅由 #if NET48 条件编译处理
+      ═══════════════════════════════════════════════════════════════════
+    -->
+    <Compile Include="..\..\ServerUI 测试版-A\ServerUI\**\*.cs"
+             Exclude="..\..\ServerUI 测试版-A\ServerUI\bin\**;..\..\ServerUI 测试版-A\ServerUI\obj\**"
+             Link="Shared\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

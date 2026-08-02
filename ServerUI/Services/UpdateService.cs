@@ -351,7 +351,7 @@ public class UpdateService
         foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
             // Build outputs are regenerated and do not describe repository updates.
-            var relative = Path.GetRelativePath(root, path);
+            var relative = Compat.GetRelativePath(root, path);
             if (relative.StartsWith(".git" + Path.DirectorySeparatorChar)
                 || relative.StartsWith("dist" + Path.DirectorySeparatorChar))
                 continue;
@@ -396,7 +396,9 @@ public class UpdateService
         var all = text.Split('\n');
         // 从后往前取 lines 行（如果文件不够 lines 行，从头开始取）
         var start = Math.Max(0, all.Length - lines);
-        return string.Join("\n", all[start..]).TrimEnd('\r');
+        var tail = new System.Collections.Generic.List<string>();
+        for (int i = start; i < all.Length; i++) tail.Add(all[i]);
+        return string.Join("\n", tail.ToArray()).TrimEnd('\r');
     }
 
     /*

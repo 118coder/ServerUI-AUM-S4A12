@@ -359,7 +359,7 @@ public partial class MainForm : AntdUI.Window
         Lg("ServerUI 版本: " + VER, Color.DarkOrange);
 
         // ---- 检测便携版/有依赖版 ----
-        var exePath = Environment.ProcessPath ?? "";
+        var exePath = Compat.ExePath();
         bool isPortable = !string.IsNullOrEmpty(exePath)
             && File.Exists(exePath)
             && new FileInfo(exePath).Length > 50_000_000;
