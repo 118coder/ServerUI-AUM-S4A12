@@ -225,12 +225,13 @@ function Download-FromGitee($url, $target, $timeout = 30) {
         if ($contentB64) {
             $bytes = [Convert]::FromBase64String($contentB64)
             [IO.File]::WriteAllBytes($target, $bytes)
-            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0)
+            # v1.921: 下载后立即做 ZIP 完整性校验, 截断文件视为失败
+            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0) -and (Test-ZipIntegrity $target)
         }
         # 大文件无 content 字段，使用 download_url
         if ($meta.download_url) {
             Invoke-WebRequest -Uri $meta.download_url -OutFile $target -UseBasicParsing -TimeoutSec $timeout
-            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0)
+            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0) -and (Test-ZipIntegrity $target)
         }
         return $false
     } catch { return $false }
@@ -249,13 +250,14 @@ function Download-FromGitHub($repoPath, $target, $timeout = 30) {
         $meta = $resp.Content | ConvertFrom-Json
         if ($meta.download_url) {
             Invoke-WebRequest -Uri $meta.download_url -OutFile $target -UseBasicParsing -TimeoutSec $timeout
-            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0)
+            # v1.921: 下载后立即做 ZIP 完整性校验, 截断文件视为失败
+            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0) -and (Test-ZipIntegrity $target)
         }
         # 小文件可能直接返回 content
         if ($meta.content) {
             $bytes = [Convert]::FromBase64String($meta.content.Replace("`n","").Replace("`r",""))
             [IO.File]::WriteAllBytes($target, $bytes)
-            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0)
+            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0) -and (Test-ZipIntegrity $target)
         }
         return $false
     } catch { return $false }
@@ -291,6 +293,27 @@ function Download-File($uri, $target) {
         }
     }
     return $false   # 5 次都失败，返回失败
+}
+
+# ---- ZIP 完整性快速校验 (v1.921) ----
+# 只检查魔数, 不完整解压:
+#   文件头 PK\x03\x04 (ZIP 魔数) + 文件尾 PK\x05\x06 (中央目录结尾记录)
+# ZIP 的中央目录位于文件末尾, 下载被截断哪怕几十字节都会缺尾记录,
+# 旧代码只检查"文件存在且>0字节", 截断下载会被误判成功, 导致
+# "找不到中央目录结尾记录" 错误; 此函数让截断文件在下载阶段就被识破并重试
+function Test-ZipIntegrity($path) {
+    try {
+        $b = [IO.File]::ReadAllBytes($path)
+        if ($b.Length -lt 22) { return $false }
+        # 文件头魔数 PK\x03\x04
+        if (-not ($b[0] -eq 0x50 -and $b[1] -eq 0x4B)) { return $false }
+        # 文件尾: 中央目录结尾记录 (可带最长 65535 字节注释, 扫最后 ~70KB)
+        $start = [Math]::Max(0, $b.Length - 70000)
+        for ($i = $start; $i -lt $b.Length - 3; $i++) {
+            if ($b[$i] -eq 0x50 -and $b[$i+1] -eq 0x4B -and $b[$i+2] -eq 0x05 -and $b[$i+3] -eq 0x06) { return $true }
+        }
+        return $false
+    } catch { return $false }
 }
 
 # ---- API 请求函数（轻量 GET，带重试） ----
@@ -1121,6 +1144,19 @@ try {
             [void]$svrPS.AddScript({
                 param($u, $t, $tok, $timeout, $maxRetries)
                 Remove-Item $t -Force -ErrorAction SilentlyContinue
+                # v1.921: ZIP 完整性快速校验 (Runspace 内无法调用外部函数, 内联实现)
+                function Test-ZipIntegrity($p) {
+                    try {
+                        $b = [IO.File]::ReadAllBytes($p)
+                        if ($b.Length -lt 22) { return $false }
+                        if (-not ($b[0] -eq 0x50 -and $b[1] -eq 0x4B)) { return $false }
+                        $start = [Math]::Max(0, $b.Length - 70000)
+                        for ($i = $start; $i -lt $b.Length - 3; $i++) {
+                            if ($b[$i] -eq 0x50 -and $b[$i+1] -eq 0x4B -and $b[$i+2] -eq 0x05 -and $b[$i+3] -eq 0x06) { return $true }
+                        }
+                        return $false
+                    } catch { return $false }
+                }
             $h = if ($tok) { @{ "PRIVATE-TOKEN" = $tok } } else { @{} }
             for ($a = 1; $a -le $maxRetries; $a++) {
                 try {
@@ -1129,7 +1165,8 @@ try {
                     } else {
                         Invoke-WebRequest -Uri $u -OutFile $t -UseBasicParsing -TimeoutSec $timeout
                     }
-                    if ((Test-Path $t) -and (Get-Item $t).Length -gt 51200) { return $true }
+                    # 大小 + ZIP 完整性双重校验: 截断文件立即重试, 不再误报成功
+                    if ((Test-Path $t) -and (Get-Item $t).Length -gt 51200 -and (Test-ZipIntegrity $t)) { return $true }
                     Remove-Item $t -Force -ErrorAction SilentlyContinue
                 } catch {
                     Remove-Item $t -Force -ErrorAction SilentlyContinue
@@ -1157,6 +1194,19 @@ try {
     [void]$gmPS.AddScript({
         param($u, $t, $tok, $timeout, $maxRetries)
         Remove-Item $t -Force -ErrorAction SilentlyContinue
+        # v1.921: ZIP 完整性快速校验 (Runspace 内内联实现)
+        function Test-ZipIntegrity($p) {
+            try {
+                $b = [IO.File]::ReadAllBytes($p)
+                if ($b.Length -lt 22) { return $false }
+                if (-not ($b[0] -eq 0x50 -and $b[1] -eq 0x4B)) { return $false }
+                $start = [Math]::Max(0, $b.Length - 70000)
+                for ($i = $start; $i -lt $b.Length - 3; $i++) {
+                    if ($b[$i] -eq 0x50 -and $b[$i+1] -eq 0x4B -and $b[$i+2] -eq 0x05 -and $b[$i+3] -eq 0x06) { return $true }
+                }
+                return $false
+            } catch { return $false }
+        }
         $h = if ($tok) { @{ "PRIVATE-TOKEN" = $tok } } else { @{} }
         for ($a = 1; $a -le $maxRetries; $a++) {
             try {
@@ -1165,7 +1215,8 @@ try {
                 } else {
                     Invoke-WebRequest -Uri $u -OutFile $t -UseBasicParsing -TimeoutSec $timeout
                 }
-                if ((Test-Path $t) -and (Get-Item $t).Length -gt 10240) { return $true }
+                # 大小 + ZIP 完整性双重校验: 截断文件立即重试
+                if ((Test-Path $t) -and (Get-Item $t).Length -gt 10240 -and (Test-ZipIntegrity $t)) { return $true }
                 Remove-Item $t -Force -ErrorAction SilentlyContinue
             } catch {
                 Remove-Item $t -Force -ErrorAction SilentlyContinue
