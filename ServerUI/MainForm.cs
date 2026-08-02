@@ -1,4 +1,4 @@
-﻿/*
+/*
  * ==================================================================
  *     主窗口类 — 核心框架 (MainForm.cs) — ServerS4A12 GUI 管理器
  * ==================================================================
@@ -60,7 +60,11 @@ public partial class MainForm : AntdUI.Window
     const int MB = 10;
 
     // VER = 当前工具版本号 — 显示在窗口标题和启动日志中
+#if NET48
+    internal const string VER = "2.02-V";   // Win7 兼容版
+#else
     internal const string VER = "2.02";
+#endif
 
     // ===== 路径计算 =====
     readonly string _bd = AppDomain.CurrentDomain.BaseDirectory;
@@ -368,7 +372,7 @@ public partial class MainForm : AntdUI.Window
         catch { }
         try
         {
-            var exe = Environment.ProcessPath;
+            var exe = Compat.ExePath();
             if (!string.IsNullOrEmpty(exe) && File.Exists(exe))
             {
                 var ic = Icon.ExtractAssociatedIcon(exe);

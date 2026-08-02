@@ -1,4 +1,4 @@
-﻿/*
+/*
  * ==================================================================
  * MainForm 页面构建部分 (partial class)
  * 包含: 开始页 / 存档管理页 / 设置与关于页 / 使用说明页 / 日志条
@@ -938,7 +938,7 @@ public partial class MainForm : AntdUI.Window
         {
             foreach (var f in files)
             {
-                var rel = Path.GetRelativePath(src, f);
+                var rel = Compat.GetRelativePath(src, f);
                 var dst = Path.Combine(_gr, rel);
                 var dir = Path.GetDirectoryName(dst);
                 if (!string.IsNullOrEmpty(dir))

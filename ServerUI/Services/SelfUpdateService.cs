@@ -109,7 +109,7 @@ public class SelfUpdateService
                 client.DefaultRequestHeaders.Add("Pragma", "no-cache");
 
                 var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                var url = GitHubRaw + VerFile + "?r=" + ts + "&_=" + Guid.NewGuid().ToString("N")[..8];
+                var url = GitHubRaw + VerFile + "?r=" + ts + "&_=" + Guid.NewGuid().ToString("N").Substring(0, 8);
                 var text = await client.GetStringAsync(url);
                 text = text.Trim();
                 text = Regex.Replace(text, @"\s+", "");
@@ -162,7 +162,7 @@ public class SelfUpdateService
         var tmpZip = Path.Combine(tmpDir, "source.zip");
         var tmpExtract = Path.Combine(tmpDir, "extract");
         var publishDir = Path.Combine(tmpDir, "publish");
-        var curExe = Environment.ProcessPath ?? "";
+        var curExe = Compat.ExePath();
 
         try
         {
@@ -181,7 +181,12 @@ public class SelfUpdateService
                     using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
                     client.DefaultRequestHeaders.Add("User-Agent", "ServerUI-AUM");
                     var data = await client.GetByteArrayAsync(RepoZipUrl);
+#if NET48
+                    // Win7 版 (net48) 无异步写文件 API, 用同步等价
+                    File.WriteAllBytes(tmpZip, data);
+#else
                     await File.WriteAllBytesAsync(tmpZip, data);
+#endif
 
                     if (new FileInfo(tmpZip).Length > 10240) { ok = true; break; }
                 }
@@ -287,7 +292,7 @@ public class SelfUpdateService
             OutputReceived?.Invoke("[AUM更新] 编译成功，正在准备替换...");
             var psPath = Path.Combine(tmpDir, "replace.ps1");
             var psScript = new StringBuilder();
-            psScript.AppendLine("$oldPid = " + Environment.ProcessId + ";");
+            psScript.AppendLine("$oldPid = " + Compat.Pid + ";");
             psScript.AppendLine("$newExe = @\"\n" + fdExePath + "\n\"@;");
             psScript.AppendLine("$target = @\"\n" + curExe + "\n\"@;");
             psScript.AppendLine("$tmpDir = @\"\n" + tmpDir + "\n\"@;");
@@ -474,7 +479,12 @@ public class SelfUpdateService
             }
         });
 
+#if NET48
+        // Win7 版 (net48) 无 WaitForExitAsync, 用阻塞式等待 (自更新编译期间界面暂不可交互, 可接受)
+        p.WaitForExit();
+#else
         await p.WaitForExitAsync();
+#endif
         return p.ExitCode;
     }
 

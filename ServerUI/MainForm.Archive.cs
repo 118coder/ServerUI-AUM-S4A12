@@ -236,7 +236,7 @@ public partial class MainForm : AntdUI.Window
 
         while (dirs.Count > MB)
         {
-            dirs[^1].Delete(true);
+            dirs[dirs.Count - 1].Delete(true);
             dirs.RemoveAt(dirs.Count - 1);
         }
     }
