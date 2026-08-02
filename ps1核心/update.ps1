@@ -1751,13 +1751,28 @@ try {
     $buildOk = $false
     $gmBuildOk = $false
 
-    # ---- 备份编译产物中的数据库 ----
-    # dist 目录下的 inventory.db 是编译后的服务端使用的数据库
-    # 编译过程中可能会被覆盖，先备份
-    $distDb = Join-Path $SrcRoot "dist\win-x64\Data\inventory.db"
-    $distDbBak = Join-Path $SrcRoot "dist\win-x64\Data\inventory.db.tmpbak"
-    if (Test-Path $distDb) {
-        Copy-Item $distDb $distDbBak -Force
+    # ---- 备份编译产物中的数据库文件 (v1.922) ----
+    # dist 目录下的数据库由编译过程覆盖, 只备份 inventory.db 不够:
+    # 数据库结构更新会生成 inventory.db-shm / inventory.db-wal 等副件,
+    # 这里把 Data 下所有 DB 相关文件(.db 及副件)整体快照, 编译后原样恢复
+    $distDataDir = Join-Path $SrcRoot "dist\win-x64\Data"
+    $distDbBakDir = Join-Path $SrcRoot "dist\win-x64\.db-backup"
+    if (Test-Path $distDbBakDir) { Remove-Item -Recurse -Force $distDbBakDir -ErrorAction SilentlyContinue }
+    $distDbCount = 0
+    if (Test-Path $distDataDir) {
+        $dbFiles = Get-ChildItem $distDataDir -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '\.db' }
+        foreach ($df in $dbFiles) {
+            $rel = $df.FullName.Substring($distDataDir.Length).TrimStart('\')
+            $dstF = Join-Path $distDbBakDir $rel
+            $dstDir = Split-Path $dstF -Parent
+            if (-not (Test-Path $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
+            Copy-Item $df.FullName $dstF -Force
+            $distDbCount++
+        }
+        Write-Host "Backed up $distDbCount DB file(s) from dist Data"
+    } else {
+        Write-Host "No dist Data directory, skip DB backup."
     }
 
     if (-not $dn) {
@@ -1990,11 +2005,20 @@ try {
         }
     }
 
-    # ---- 恢复 dist 目录的数据库 ----
-    if (Test-Path $distDbBak) {
-        Copy-Item $distDbBak $distDb -Force
-        Remove-Item $distDbBak -Force
-        Write-Host "Restored dist inventory.db"
+    # ---- 恢复 dist 目录的数据库文件 (v1.922) ----
+    # 编译会覆盖 Data 目录, 把快照中的全部 DB 文件(含 shm/wal 副件)原样恢复
+    if (Test-Path $distDbBakDir) {
+        $restored = 0
+        Get-ChildItem $distDbBakDir -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            $rel = $_.FullName.Substring($distDbBakDir.Length).TrimStart('\')
+            $dstF = Join-Path $distDataDir $rel
+            $dstDir = Split-Path $dstF -Parent
+            if (-not (Test-Path $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
+            Copy-Item $_.FullName $dstF -Force
+            $restored++
+        }
+        Remove-Item -Recurse -Force $distDbBakDir -ErrorAction SilentlyContinue
+        Write-Host "Restored $restored DB file(s) to dist Data"
     }
 
     # ---- 补充检查：确保关键配置文件存在 ----
