@@ -665,7 +665,7 @@ public partial class MainForm : AntdUI.Window
         };
         u.RowStyles.Add(new RowStyle(SizeType.Absolute, 102F));   // 关于
         u.RowStyles.Add(new RowStyle(SizeType.Absolute, 154F));   // 仓库链接 (4 行)
-        u.RowStyles.Add(new RowStyle(SizeType.Absolute, 136F));   // 实用工具
+        u.RowStyles.Add(new RowStyle(SizeType.Absolute, 182F));   // 实用工具 (3 个按钮: 编译/赛利亚/安全DLL)
         u.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));    // 占位填充行
         pgUpd.Controls.Add(u);
 
@@ -780,7 +780,7 @@ public partial class MainForm : AntdUI.Window
         var g3 = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 3, RowCount = 4,
+            ColumnCount = 3, RowCount = 5,
             BackColor = Color.Transparent
         };
         g3.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190F));
@@ -788,7 +788,8 @@ public partial class MainForm : AntdUI.Window
         g3.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 40F));
         g3.RowStyles.Add(new RowStyle(SizeType.Absolute, 22F));   // 分组标题
         g3.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));   // 进行本地编译
-        g3.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));   // 修复赛丽亚房间问题 (与上一行等高)
+        g3.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));   // 修复赛丽亚房间问题
+        g3.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));   // 安装新安全DLL
         g3.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));   // 占位填充行
 
         g3.Controls.Add(Cap("实用工具"), 0, 0);
@@ -827,8 +828,75 @@ public partial class MainForm : AntdUI.Window
         fixTip.TextMultiLine = true;
         g3.Controls.Add(btFix, 0, 2);
         g3.Controls.Add(fixTip, 1, 2);
+
+        // [安装新安全DLL] — 样式与"修复赛丽亚房间问题"一致, 颜色为绿色 (Success)
+        // 从 实用工具包\DLL覆盖\ 解压 86JP-DLL安全性补丁.zip 覆盖到游戏根目录;
+        // 已存在"已安装"标记文件时跳过 (更新时自动执行)
+        var btSec = B("安装新安全DLL", TTypeMini.Success, "SafetyCertificateOutlined");
+        btSec.Click += (s, e) => InstallSecurityDll();
+        var secTip = L("安装 86JP 安全 DLL 补丁到游戏根目录，防止私服 DLL 泄露隐私", 8.5f);
+        secTip.TextAlign = ContentAlignment.MiddleLeft;
+        secTip.TextMultiLine = true;
+        g3.Controls.Add(btSec, 0, 3);
+        g3.Controls.Add(secTip, 1, 3);
         c3.Controls.Add(g3);
         u.Controls.Add(c3, 0, 2);
+    }
+
+    /*
+     * 安装新安全DLL (InstallSecurityDll) — 从 实用工具包\DLL覆盖\ 解压
+     * 86JP-DLL安全性补丁.zip 并覆盖到游戏根目录 (DNF.exe 所在目录)
+     * 更新时自动调用; 检测到标记文件 86JP-DLL安全性补丁-已安装.txt 则跳过
+     */
+    internal void InstallSecurityDll()
+    {
+        var dllDir = Path.Combine(_ad, "实用工具包", "DLL覆盖");
+        var zip = Path.Combine(dllDir, "86JP-DLL安全性补丁.zip");
+        var marker = Path.Combine(dllDir, "86JP-DLL安全性补丁-已安装.txt");
+
+        if (!File.Exists(zip))
+        {
+            Lg(">>> [安全DLL] 未找到补丁包: " + zip, Or);
+            return;
+        }
+        if (File.Exists(marker))
+        {
+            Lg(">>> [安全DLL] 已安装过（检测到标记文件），跳过", Txt2);
+            return;
+        }
+
+        Lg(">>> [安全DLL] 正在安装新安全 DLL 补丁...", Color.CornflowerBlue);
+        try
+        {
+            int count = 0;
+            using (var za = System.IO.Compression.ZipFile.OpenRead(zip))
+            {
+                foreach (var entry in za.Entries)
+                {
+                    if (string.IsNullOrEmpty(entry.Name)
+                        || entry.FullName.EndsWith("/")
+                        || entry.FullName.EndsWith("\\"))
+                        continue;
+                    var dst = Path.Combine(_gr, entry.FullName);
+                    var dir = Path.GetDirectoryName(dst);
+                    if (!string.IsNullOrEmpty(dir))
+                        Directory.CreateDirectory(dir);
+                    using var src = entry.Open();
+                    using var fs = new FileStream(dst, FileMode.Create, FileAccess.Write);
+                    src.CopyTo(fs);
+                    count++;
+                    Lg(">>> [安全DLL] 已覆盖: " + entry.FullName, Gn);
+                }
+            }
+            File.WriteAllText(marker,
+                "安装时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                Encoding.UTF8);
+            Lg(">>> [安全DLL] 安装完成: 覆盖 " + count + " 个文件, 已生成安装标记", Gn);
+        }
+        catch (Exception ex)
+        {
+            Lg(">>> [安全DLL] 安装失败: " + ex.Message, Rd);
+        }
     }
 
     /*
@@ -836,7 +904,7 @@ public partial class MainForm : AntdUI.Window
      */
     void FixSeriaRoomConfirm()
     {
-        var src = Path.Combine(_ad, "赛利亚房间修复");
+        var src = Path.Combine(_ad, "实用工具包", "赛利亚房间修复");
         if (!Directory.Exists(src))
         {
             Lg("赛利亚房间修复目录不存在: " + src, Rd);
@@ -850,7 +918,7 @@ public partial class MainForm : AntdUI.Window
         }
 
         var r = MessageBox.Show(
-            "将用 AUM管理组件\\赛利亚房间修复\\ 内的文件（" + files.Length
+            "将用 AUM管理组件\\实用工具包\\赛利亚房间修复\\ 内的文件（" + files.Length
             + " 个）替换游戏根目录（" + _gr + "）中的对应文件，其中包含 86JP.dll。\n\n继续？",
             "修复赛利亚房间问题",
             MessageBoxButtons.YesNo, MessageBoxIcon.Question);
@@ -962,7 +1030,7 @@ public partial class MainForm : AntdUI.Window
 
             ("运行方式",
              "可选运行方式", "ThunderboltOutlined", "可选运行方式（DX11 / DX12）",
-             "为兼容不同显卡，选择游戏的渲染运行方式。\n\n使用方法：\n  1. 点击「以DX11方式运行游戏」或「以DX12方式运行游戏」\n  2. 程序自动把对应补丁文件（D3D9.dll / dgVoodoo.conf 等）复制到游戏目录\n  3. 点击「开始游戏」即可生效\n\n提示：\n· 两种方式只能二选一\n· 如果游戏无法正常游玩，请取消选择相关可选运行方式\n· 补丁目录为 AUM管理组件\\DX11补丁 与 DX12补丁"),
+             "为兼容不同显卡，选择游戏的渲染运行方式。\n\n使用方法：\n  1. 点击「以DX11方式运行游戏」或「以DX12方式运行游戏」\n  2. 程序自动把对应补丁文件（D3D9.dll / dgVoodoo.conf 等）复制到游戏目录\n  3. 点击「开始游戏」即可生效\n\n提示：\n· 两种方式只能二选一\n· 如果游戏无法正常游玩，请取消选择相关可选运行方式\n· 补丁目录为 AUM管理组件\\DX11补丁 与 DX12补丁\n\n切换运行方式方式，对游戏性能提升有限，建议使用原生运行方式（DX9）进行游戏"),
             ("运行方式",
              "去除水印的方式", "WatermarkOutlined", "去除dgVoodooCpl水印",
              "使用无水印版本的 dgVoodoo 补丁。\n\n使用方法：\n  1. 先选择 DX11 或 DX12 运行方式\n  2. 打开本开关\n  3. 程序自动改用「无水印」目录下的补丁文件\n\n提示：必须搭配 DX11/DX12 使用，单独开启无效"),

@@ -60,7 +60,7 @@ public partial class MainForm : AntdUI.Window
     const int MB = 10;
 
     // VER = 当前工具版本号 — 显示在窗口标题和启动日志中
-    internal const string VER = "2.01";
+    internal const string VER = "2.02";
 
     // ===== 路径计算 =====
     readonly string _bd = AppDomain.CurrentDomain.BaseDirectory;
@@ -137,6 +137,14 @@ public partial class MainForm : AntdUI.Window
     Timer _fadeTimer;                     // 过渡动画定时器
     AntdUI.Panel _contentCard;            // 内容卡片 (过渡动画作用对象)
     readonly StringBuilder _logBuilder = new();  // 累积全部运行日志
+
+    // ===== 日志攒批渲染 (性能优化) =====
+    // Lg() 只做线程安全的入队, 由 UI 线程的 FlushLog 定时器统一渲染:
+    //   1. 跨线程调用不再逐行 Invoke 封送 (更新/镜像大量输出时不再卡顿)
+    //   2. 同一批次内多次 AppendText 合并为一次绘制
+    //   3. 仅在日志滚动条位于底部时才自动跟随 (用户上翻查看时不抢滚)
+    readonly System.Collections.Generic.Queue<(string m, Color c, bool bold)> _logQueue = new();
+    Timer _logFlush;                      // 日志刷新定时器 (30ms)
 
     // ===== 经典模式转发钩子 (由 ClassicForm 挂接, 不影响主窗口自身) =====
     internal Action<string, Color> LogHook;     // 日志实时转发到经典模式窗口
