@@ -473,7 +473,7 @@ public partial class MiniForm : AntdUI.Window
     static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     /*
-     * 递归启用双缓冲
+     * 递归启用双缓冲 (v2.03: 扩展到 AntdUI 自绘容器)
      */
     static void EnableDoubleBuffer(Control root)
     {
@@ -482,7 +482,9 @@ public partial class MiniForm : AntdUI.Window
             | System.Reflection.BindingFlags.NonPublic);
         foreach (Control c in root.Controls)
         {
-            if (c is TableLayoutPanel || c is System.Windows.Forms.Panel || c is FlowLayoutPanel)
+            if (c is TableLayoutPanel || c is System.Windows.Forms.Panel || c is FlowLayoutPanel
+                || c is AntdUI.Panel || c is AntdUI.In.Panel || c is AntdUI.Table
+                || c is AntdUI.Menu || c is AntdUI.PageHeader || c is AntdUI.Progress)
                 try { prop?.SetValue(c, true); } catch { }
             EnableDoubleBuffer(c);
         }

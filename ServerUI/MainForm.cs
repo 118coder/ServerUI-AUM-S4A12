@@ -199,7 +199,8 @@ public partial class MainForm : AntdUI.Window
         try { _classicForm = new ClassicForm(this); } catch { }
 
         // Load 事件中执行: 系统检测 / 状态刷新 / 网络检测 / AUM 自检
-        Load += async (s, e) => { PreLayoutClassic(); Ck(); Rf(); CheckDnfExists(); await CheckBasicNetwork(); await CheckAUMUpdate(); };
+        // v2.03: Ck() 已异步化(SDK探测在后台线程), 首帧立即显示不卡顿
+        Load += async (s, e) => { PreLayoutClassic(); CheckDnfExists(); await Ck(); Rf(); await CheckBasicNetwork(); await CheckAUMUpdate(); };
     }
 
     /*
@@ -338,7 +339,25 @@ public partial class MainForm : AntdUI.Window
     }
 
     /*
-     * 递归启用双缓冲 (TableLayoutPanel / Panel 防闪烁、防切换页面残影)
+     * 窗口级合成 (WS_EX_COMPOSITED) — 整窗单次合成
+     * v2.03 实测: 开启后 AntdUI 按钮的悬停过渡动画明显变慢(视觉卡顿),
+     * 默认关闭; 如需要可改为 true 再测试
+     */
+    const bool UseComposited = false;
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            if (UseComposited) cp.ExStyle |= 0x02000000;   // WS_EX_COMPOSITED
+            return cp;
+        }
+    }
+
+    /*
+     * 递归启用双缓冲 (TableLayoutPanel / Panel / FlowLayoutPanel 防闪烁、防切换页面残影)
+     * v2.03: 扩展到 AntdUI 自绘容器 (Panel/In.Panel/Table/Menu/PageHeader/Progress)
      */
     static void EnableDoubleBuffer(Control root)
     {
@@ -347,7 +366,9 @@ public partial class MainForm : AntdUI.Window
             | System.Reflection.BindingFlags.NonPublic);
         foreach (Control c in root.Controls)
         {
-            if (c is TableLayoutPanel || c is System.Windows.Forms.Panel || c is FlowLayoutPanel)
+            if (c is TableLayoutPanel || c is System.Windows.Forms.Panel || c is FlowLayoutPanel
+                || c is AntdUI.Panel || c is AntdUI.In.Panel || c is AntdUI.Table
+                || c is AntdUI.Menu || c is AntdUI.PageHeader || c is AntdUI.Progress)
                 try { prop?.SetValue(c, true); } catch { }
             EnableDoubleBuffer(c);
         }
@@ -399,7 +420,8 @@ public partial class MainForm : AntdUI.Window
             Type = ty,
             Dock = DockStyle.Fill,
             Margin = new Padding(4),
-            Cursor = Cursors.Hand
+            Cursor = Cursors.Hand,
+            WaveSize = 0        // v2.03: 关闭水波动画, 减少点击/滚动时的重绘开销
         };
         if (!string.IsNullOrEmpty(svg)) b.IconSvg = svg;
         if (ty == TTypeMini.Default)
@@ -430,8 +452,9 @@ public partial class MainForm : AntdUI.Window
     /*
      * 卡片工厂 — 圆角卡片 (主题自适应背景 + 阴影 + 1px 主题边框)
      * BorderColor 不指定 → 使用主题 BorderColor, 深浅模式下自动适配且清晰可见
+     * v2.03: 阴影 2→1, 减少重绘合成开销
      */
-    AntdUI.Panel Card(int radius = 8, int shadow = 2)
+    AntdUI.Panel Card(int radius = 8, int shadow = 1)
     {
         return new AntdUI.Panel
         {
