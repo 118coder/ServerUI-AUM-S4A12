@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <!-- Win7 兼容版: .NET Framework 4.8 (Win7 SP1 最高可运行版本) -->
+    <!-- Win7 兼容模式: .NET Framework 4.8 (Win7 SP1 最高可运行版本) -->
+    <!-- 与 ServerUI.csproj 同目录, 自动包含同一份源码 (Compat.cs + #if NET48) -->
     <TargetFramework>net48</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <LangVersion>latest</LangVersion>
@@ -26,19 +27,8 @@
     <PackageReference Include="AntdUI" Version="2.4.3" />
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
-    <!-- Costura.Fody: 将依赖 DLL 全部嵌入 ServerUI-Win7.exe, 部署只需一个 exe -->
+    <!-- Costura.Fody: 依赖 DLL 全部嵌入, 单个 exe 即 Win7 兼容模式 -->
     <PackageReference Include="Costura.Fody" Version="5.7.0" />
     <PackageReference Include="Fody" Version="6.8.2" PrivateAssets="all" />
-  </ItemGroup>
-  <ItemGroup>
-    <!--
-      ═══════════════════════════════════════════════════════════════════
-      【共享主源码】— 与主版本 (net10) 共用同一套源码, 避免两套源码冲突
-      修改主源码任意文件 → 两个版本同时生效; 差异仅由 #if NET48 条件编译处理
-      ═══════════════════════════════════════════════════════════════════
-    -->
-    <Compile Include="..\..\ServerUI 测试版-A\ServerUI\**\*.cs"
-             Exclude="..\..\ServerUI 测试版-A\ServerUI\bin\**;..\..\ServerUI 测试版-A\ServerUI\obj\**"
-             Link="Shared\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>
