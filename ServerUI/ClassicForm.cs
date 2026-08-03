@@ -53,7 +53,7 @@ public partial class ClassicForm : AntdUI.Window
     // UI 控件
     AntdUI.Label lbStatus, lbPvf, lbVe, lbLu, lbCu, lbBk;
     AntdUI.Button btPlay, btStop, btRe, btGm, btPv, btMD, btOD, btOB;
-    AntdUI.Button btIn, btVL, btAu, btSdk, btBack, btCp, btCl;
+    AntdUI.Button btIn, btVL, btBack, btCp, btCl;
     AntdUI.Button btSC, btIm, btEx, btUd, btRf;
     AntdUI.Switch cbCl;
     AntdUI.Table lv;
@@ -117,7 +117,7 @@ public partial class ClassicForm : AntdUI.Window
     internal void OnMainTick() => RefreshStatus();
 
     /*
-     * 递归启用双缓冲 (TableLayoutPanel / Panel 防闪烁)
+     * 递归启用双缓冲 (v2.03: 扩展到 AntdUI 自绘容器)
      */
     static void EnableDoubleBuffer(Control root)
     {
@@ -126,7 +126,9 @@ public partial class ClassicForm : AntdUI.Window
             | System.Reflection.BindingFlags.NonPublic);
         foreach (Control c in root.Controls)
         {
-            if (c is TableLayoutPanel || c is System.Windows.Forms.Panel || c is FlowLayoutPanel)
+            if (c is TableLayoutPanel || c is System.Windows.Forms.Panel || c is FlowLayoutPanel
+                || c is AntdUI.Panel || c is AntdUI.In.Panel || c is AntdUI.Table
+                || c is AntdUI.Menu || c is AntdUI.PageHeader || c is AntdUI.Progress)
                 try { prop?.SetValue(c, true); } catch { }
             EnableDoubleBuffer(c);
         }
@@ -403,20 +405,18 @@ public partial class ClassicForm : AntdUI.Window
         toolCard.Controls.Add(toolG);
         left.Controls.Add(toolCard, 0, 3);
 
-        // ---- 更新管理卡: 开始更新 / 查看更新日志 / 更新AUM + 安装SDK ----
+        // ---- 更新管理卡: 开始更新 / 查看更新日志 (v2.03: 移除 更新AUM/安装SDK) ----
         var updCard = Card(8, 2);
         updCard.Padding = new Padding(14, 12, 14, 14);
         var updG = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 2, RowCount = 4,
+            ColumnCount = 1, RowCount = 3,
             BackColor = Color.Transparent
         };
-        updG.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-        updG.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+        updG.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         updG.RowStyles.Add(new RowStyle(SizeType.Absolute, 56F));   // 开始更新
         updG.RowStyles.Add(new RowStyle(SizeType.Absolute, 46F));   // 查看更新日志
-        updG.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));   // 更新AUM / 安装SDK
         updG.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));   // 占位填充行
 
         btIn = B("开始更新", TTypeMini.Primary, "ThunderboltOutlined", 12, true);
@@ -431,24 +431,8 @@ public partial class ClassicForm : AntdUI.Window
             Lg(">>> 查看更新日志", Color.CornflowerBlue);
             _main.SL();
         };
-        btAu = B("更新AUM", TTypeMini.Primary, "SyncOutlined", 10, false);
-        btAu.Click += async (s, e) =>
-        {
-            Lg(">>> 正在检测 AUM 管理器更新...", Color.CornflowerBlue);
-            await _main.CheckAndUpdateAUM();
-        };
-        btSdk = B("安装NET.10 SDK", TTypeMini.Warn, "DownloadOutlined", 10, false);
-        btSdk.Click += async (s, e) =>
-        {
-            Lg(">>> 开始安装 .NET 10 SDK...", Color.CornflowerBlue);
-            await _main.IS();
-        };
         updG.Controls.Add(btIn, 0, 0);
-        updG.SetColumnSpan(btIn, 2);
         updG.Controls.Add(btVL, 0, 1);
-        updG.SetColumnSpan(btVL, 2);
-        updG.Controls.Add(btAu, 0, 2);
-        updG.Controls.Add(btSdk, 1, 2);
         updCard.Controls.Add(updG);
         left.Controls.Add(updCard, 0, 4);
 
@@ -793,7 +777,10 @@ public partial class ClassicForm : AntdUI.Window
     /*
      * 日志批量渲染 (FlushLog) — 由 30ms 定时器在 UI 线程执行
      * 仅底部时自动跟随; 超限按字符裁剪 (保留最近部分, 不丢格式)
+     * v2.03: 单批最多 200 行, 超量自动分片到下一次
      */
+    const int LogFlushMaxLines = 200;
+
     void FlushLog()
     {
         if (rt == null || rt.IsDisposed) return;
@@ -801,8 +788,9 @@ public partial class ClassicForm : AntdUI.Window
         lock (_logQueue)
         {
             if (_logQueue.Count == 0) return;
-            batch = new List<(string, Color)>(_logQueue);
-            _logQueue.Clear();
+            var n = Math.Min(LogFlushMaxLines, _logQueue.Count);
+            batch = new List<(string, Color)>(n);
+            for (int i = 0; i < n; i++) batch.Add(_logQueue.Dequeue());
         }
 
         bool follow = IsLogAtBottom();
@@ -1035,9 +1023,10 @@ public partial class ClassicForm : AntdUI.Window
     // 控件工厂
     // =================================================================
     // 卡片统一显式描边 (同 Default 按钮的可见灰), 明暗主题下均清晰可辨
+    // v2.03: 阴影 1, 减少重绘合成开销
     static readonly Color CardBorder = Color.FromArgb(100, 102, 110);
 
-    AntdUI.Panel Card(int radius = 8, int shadow = 2)
+    AntdUI.Panel Card(int radius = 8, int shadow = 1)
     {
         return new AntdUI.Panel
         {
@@ -1062,7 +1051,7 @@ public partial class ClassicForm : AntdUI.Window
             Dock = DockStyle.Fill,
             Margin = new Padding(6),
             Cursor = Cursors.Hand,
-            Font = new Font("Microsoft YaHei UI", fs, bold ? FontStyle.Bold : FontStyle.Regular)
+            WaveSize = 0        // v2.03: 关闭水波动画, 减少重绘开销
         };
         if (!string.IsNullOrEmpty(svg)) b.IconSvg = svg;
         if (ty == TTypeMini.Default)

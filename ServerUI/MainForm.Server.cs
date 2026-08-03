@@ -276,7 +276,10 @@ public partial class MainForm : AntdUI.Window
     /*
      * 日志批量渲染 (FlushLog) — 由 30ms 定时器在 UI 线程执行
      * 一次批处理内连续 AppendText 合并为单次绘制; 仅底部时自动跟随
+     * v2.03: 单批最多 200 行, 超量自动分片到下一次, 避免单次大批量 RTF 解析卡顿
      */
+    const int LogFlushMaxLines = 200;
+
     void FlushLog()
     {
         if (rt == null || rt.IsDisposed) return;
@@ -284,8 +287,9 @@ public partial class MainForm : AntdUI.Window
         lock (_logQueue)
         {
             if (_logQueue.Count == 0) return;
-            batch = new List<(string, Color, bool)>(_logQueue);
-            _logQueue.Clear();
+            var n = Math.Min(LogFlushMaxLines, _logQueue.Count);
+            batch = new List<(string, Color, bool)>(n);
+            for (int i = 0; i < n; i++) batch.Add(_logQueue.Dequeue());
         }
 
         bool follow = IsLogAtBottom();
@@ -353,8 +357,9 @@ public partial class MainForm : AntdUI.Window
      */
     /*
      * 启动时执行系统环境检测: Windows 版本 / 便携版 / .NET SDK 三级检测
+     * v2.03: SDK 三级探测(多次启动进程)移到后台线程, 首帧立即显示不卡顿
      */
-    void Ck()
+    async System.Threading.Tasks.Task Ck()
     {
         Lg("ServerUI 版本: " + VER, Color.DarkOrange);
 
@@ -385,7 +390,39 @@ public partial class MainForm : AntdUI.Window
             Lg("本版本为有依赖版，需要系统安装 .NET 10 运行环境才能运行",
                 Color.FromArgb(240, 240, 245));
 
-        // ---- 三级 .NET SDK 检测 ----
+        // ---- 三级 .NET SDK 检测 (后台线程执行, 避免首帧卡顿) ----
+        var r = await System.Threading.Tasks.Task.Run(() => ProbeDotNetSdk());
+        lbSd.Text = ".NET SDK: " + r.sdk;
+        lbSd.ForeColor = r.color;
+        _hasSdk = r.sysOk || r.pfOk || r.localOk;
+
+        if (r.sysOk || r.pfOk)
+            Lg("检测到系统已安装 .NET 10 SDK，可用于编译服务端更新",
+                Gn);
+        else if (r.localOk)
+            Lg("检测到本地便携 .NET SDK (dotnet-sdk)，可用于编译服务端更新",
+                Gn);
+        else if (isPortable)
+        {
+            Lg("未检测到 .NET 10 SDK，虽然本程序可运行，"
+                + "但更新时无法编译服务端！", Rd);
+            Lg("请将 dotnet-sdk 目录放入 AUM管理组件，"
+                + "或手动安装 .NET 10 SDK", Rd);
+        }
+        else
+        {
+            Lg("未检测到 .NET 10 运行环境，本程序可能无法正常工作！",
+                Rd);
+            Lg("请安装 .NET 10.0 或改用便携版"
+                + " (ServerUI-无依赖版.exe) 后重试", Rd);
+        }
+    }
+
+    /*
+     * .NET SDK 三级检测 (后台线程执行, Lg 线程安全可直接调用)
+     */
+    (string sdk, Color color, bool sysOk, bool pfOk, bool localOk) ProbeDotNetSdk()
+    {
         string sdk = "未安装";
         Color c = Rd;
         bool sysOk = false, pfOk = false, localOk = false;
@@ -496,30 +533,7 @@ public partial class MainForm : AntdUI.Window
             }
         }
 
-        lbSd.Text = ".NET SDK: " + sdk;
-        lbSd.ForeColor = c;
-
-        _hasSdk = sysOk || pfOk || localOk;
-        if (sysOk || pfOk)
-            Lg("检测到系统已安装 .NET 10 SDK，可用于编译服务端更新",
-                Gn);
-        else if (localOk)
-            Lg("检测到本地便携 .NET SDK (dotnet-sdk)，可用于编译服务端更新",
-                Gn);
-        else if (isPortable)
-        {
-            Lg("未检测到 .NET 10 SDK，虽然本程序可运行，"
-                + "但更新时无法编译服务端！", Rd);
-            Lg("请将 dotnet-sdk 目录放入 AUM管理组件，"
-                + "或手动安装 .NET 10 SDK", Rd);
-        }
-        else
-        {
-            Lg("未检测到 .NET 10 运行环境，本程序可能无法正常工作！",
-                Rd);
-            Lg("请安装 .NET 10.0 或改用便携版"
-                + " (ServerUI-无依赖版.exe) 后重试", Rd);
-        }
+        return (sdk, c, sysOk, pfOk, localOk);
     }
 
     // =================================================================
