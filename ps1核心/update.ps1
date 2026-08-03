@@ -50,8 +50,7 @@ $ErrorActionPreference = "Continue"
 # 例如脚本在 E:\Game\DXF\AUM管理组件\update.ps1
 # 则 $PSScriptRoot = E:\Game\DXF\AUM管理组件
 $ScriptRoot = $PSScriptRoot
-if ((Get-Item $ScriptRoot).Name -eq 'ps1核心' -or (Get-Item $ScriptRoot).Name -eq '旧版ps1') { $ScriptRoot = (Get-Item $ScriptRoot).Parent.FullName }
-if ((Get-Item $ScriptRoot).Name -eq '旧版ps1' -or (Get-Item $ScriptRoot).Name -eq 'ps1核心') { $ScriptRoot = (Get-Item $ScriptRoot).Parent.FullName }
+if ((Get-Item $ScriptRoot).Name -eq 'ps1核心') { $ScriptRoot = (Get-Item $ScriptRoot).Parent.FullName }
 
 # SrcRoot = 服务端源码主目录（脚本目录下的 ServerS4A12-AUM 文件夹）
 # 这是更新操作的目标目录，所有文件都会同步到这里
@@ -226,12 +225,13 @@ function Download-FromGitee($url, $target, $timeout = 30) {
         if ($contentB64) {
             $bytes = [Convert]::FromBase64String($contentB64)
             [IO.File]::WriteAllBytes($target, $bytes)
-            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0)
+            # v1.921: 下载后立即做 ZIP 完整性校验, 截断文件视为失败
+            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0) -and (Test-ZipIntegrity $target)
         }
         # 大文件无 content 字段，使用 download_url
         if ($meta.download_url) {
             Invoke-WebRequest -Uri $meta.download_url -OutFile $target -UseBasicParsing -TimeoutSec $timeout
-            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0)
+            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0) -and (Test-ZipIntegrity $target)
         }
         return $false
     } catch { return $false }
@@ -250,13 +250,14 @@ function Download-FromGitHub($repoPath, $target, $timeout = 30) {
         $meta = $resp.Content | ConvertFrom-Json
         if ($meta.download_url) {
             Invoke-WebRequest -Uri $meta.download_url -OutFile $target -UseBasicParsing -TimeoutSec $timeout
-            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0)
+            # v1.921: 下载后立即做 ZIP 完整性校验, 截断文件视为失败
+            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0) -and (Test-ZipIntegrity $target)
         }
         # 小文件可能直接返回 content
         if ($meta.content) {
             $bytes = [Convert]::FromBase64String($meta.content.Replace("`n","").Replace("`r",""))
             [IO.File]::WriteAllBytes($target, $bytes)
-            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0)
+            return (Test-Path $target) -and ((Get-Item $target).Length -gt 0) -and (Test-ZipIntegrity $target)
         }
         return $false
     } catch { return $false }
@@ -292,6 +293,82 @@ function Download-File($uri, $target) {
         }
     }
     return $false   # 5 次都失败，返回失败
+}
+
+# ---- ZIP 完整性快速校验 (v1.921, 流式) ----
+# 只读文件头 4 字节 + 尾部 ~64KB 扫描中央目录结尾记录, 内存占用 O(1),
+# 包体再大也适用; 发现截断/头尾损坏立即判失败
+function Test-ZipIntegrity($path) {
+    try {
+        $fs = [IO.File]::OpenRead($path)
+        try {
+            if ($fs.Length -lt 22) { return $false }
+            $head = New-Object byte[] 4
+            [void]$fs.Read($head, 0, 4)
+            if (-not ($head[0] -eq 0x50 -and $head[1] -eq 0x4B)) { return $false }
+            $scanLen = [Math]::Min([long]$fs.Length, 65557)
+            $buf = New-Object byte[] $scanLen
+            [void]$fs.Seek(-$scanLen, [IO.SeekOrigin]::End)
+            [void]$fs.Read($buf, 0, $scanLen)
+            for ($i = 0; $i -lt $scanLen - 3; $i++) {
+                if ($buf[$i] -eq 0x50 -and $buf[$i+1] -eq 0x4B -and $buf[$i+2] -eq 0x05 -and $buf[$i+3] -eq 0x06) { return $true }
+            }
+            return $false
+        } finally { $fs.Dispose() }
+    } catch { return $false }
+}
+
+# ---- ZIP 内容级校验 (v1.921, CRC 自校验) ----
+# 遍历全部条目并完整解压: ZIP 每个条目自带 CRC32, .NET 解压流读到流末尾
+# 时自动校验, 任意字节损坏(含压缩数据区)都会抛异常
+# 不依赖任何外部元数据 → 主源/镜像/缓存一视同仁, 不会产生版本误判
+function Test-ZipExtract($path) {
+    try {
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
+        try {
+            if ($zip.Entries.Count -eq 0) { return $false }
+            $buf = New-Object byte[] 65536
+            foreach ($entry in $zip.Entries) {
+                $s = $entry.Open()
+                try {
+                    while ($s.Read($buf, 0, $buf.Length) -gt 0) { }
+                } finally { $s.Dispose() }
+            }
+            return $true
+        } finally { $zip.Dispose() }
+    } catch { return $false }
+}
+
+# ---- 镜像元数据读取 (v1.921, 自洽 sha256 + 版本择优) ----
+# 读取镜像源 latest.json 的版本标识(优先 version 字段, 部分源只写 package 字段)
+# 与 sha256; 返回 @{ Version=...; Sha256=... } 或 $null (获取失败)
+# 注意: 只与本镜像自己的包比对 (上传者同时写入, 天然自洽),
+#       绝不跨源比对, 避免主源新包被镜像旧哈希误杀
+function Get-MirrorMeta($type) {
+    try {
+        if ($type -eq "codeberg") {
+            $resp = Invoke-WebRequest -Uri "https://codeberg.org/118coder/ServerS4A12.86JP/raw/branch/main/latest.json" -UseBasicParsing -TimeoutSec 15
+            $meta = $resp.Content | ConvertFrom-Json
+        }
+        elseif ($type -eq "github") {
+            $tokenB64 = "WjJod1gxQlpaVEZNYzBjMlpWZElhMkZNUTNWa1RVbHNkVTFEVmxKb1pqVlllREZwTUVoa01BPT0="
+            $tok = $utf8.GetString([Convert]::FromBase64String($utf8.GetString([Convert]::FromBase64String($tokenB64))))
+            $resp = Invoke-WebRequest -Uri "https://api.github.com/repos/118coder/ServerS4A12.86JP/contents/latest.json?ref=main" -Headers @{"Authorization"="token $tok"; "Accept"="application/vnd.github.v3+json"} -UseBasicParsing -TimeoutSec 15
+            $j = $resp.Content | ConvertFrom-Json
+            $json = $utf8.GetString([Convert]::FromBase64String($j.content.Replace("`n","").Replace("`r","")))
+            $meta = $json | ConvertFrom-Json
+        }
+        elseif ($type -eq "gitee") {
+            $resp = Invoke-WebRequest -Uri "https://gitee.com/api/v5/repos/c118oder/ServerS4A12.86JP/contents/latest.json?access_token=$GiteeToken" -UseBasicParsing -TimeoutSec 15
+            $j = $resp.Content | ConvertFrom-Json
+            $json = $utf8.GetString([Convert]::FromBase64String($j.content))
+            $meta = $json | ConvertFrom-Json
+        }
+        else { return $null }
+        $ver = [string]$meta.version
+        if (-not $ver) { $ver = [string]$meta.package }
+        return @{ Version = $ver; Sha256 = [string]$meta.sha256 }
+    } catch { return $null }
 }
 
 # ---- API 请求函数（轻量 GET，带重试） ----
@@ -1091,6 +1168,22 @@ try {
             @{Name="GitHub"; Type="github"; Url=$MirrorServerUrls[1]},
             @{Name="Codeberg"; Type="codeberg"; Url=$MirrorServerUrls[2]}
         )
+        # v1.921: 版本择优 — 预取各镜像 latest.json 元数据, 按版本标识字符串
+        # 从新到旧排序 (包名形如 ServerS4A12-20260731-0845-1234, 固定宽度格式
+        # 下字典序 = 时间序, 元数据缺失的源排最后);
+        # 元数据同时用于"自洽 sha256"校验 (只与本镜像自己的包比对)
+        $svrMeta = @{}
+        foreach ($m in $svrMirrors) {
+            $meta = Get-MirrorMeta $m.Type
+            if ($meta -and $meta.Sha256) {
+                $svrMeta[$m.Name] = $meta
+                $short = $meta.Sha256.Substring(0, [Math]::Min(8, $meta.Sha256.Length))
+                Write-Host "Server download: $($m.Name) 元数据 版本=$($meta.Version) sha=$short..."
+            } else {
+                Write-Host "Server download: $($m.Name) 元数据获取失败 (仅做 CRC 校验)"
+            }
+        }
+        $svrMirrors = @($svrMirrors | Sort-Object { $svrMeta[$_.Name].Version } -Descending)
         foreach ($m in $svrMirrors) {
             if ($svrOk) { break }
             try {
@@ -1099,15 +1192,26 @@ try {
                 if ($m.Type -eq "gitee") { $svrOk = Download-FromGitee $m.Url $TempZip 20 }
                 elseif ($m.Type -eq "github") { $svrOk = Download-FromGitHub "mirrors/ServerS4A12-latest.zip" $TempZip 20 }
                 else { Invoke-WebRequest -Uri $m.Url -OutFile $TempZip -UseBasicParsing -TimeoutSec 20 }
-                $testZip = [System.IO.Compression.ZipFile]::OpenRead($TempZip)
-                if ($testZip.Entries.Count -gt 0) { $svrOk = $true; $testZip.Dispose(); break }
-                $testZip.Dispose()
-            } catch { }
+                if (-not $svrOk) { continue }
+                # v1.921: 完整性校验链 — 魔数(结构) → CRC(内容) → 自洽 sha256
+                if (-not (Test-ZipIntegrity $TempZip)) { Write-Host "Server download: $($m.Name) 魔数校验失败"; $svrOk = $false; continue }
+                if (-not (Test-ZipExtract $TempZip)) { Write-Host "Server download: $($m.Name) CRC 解压校验失败"; $svrOk = $false; continue }
+                $meta = $svrMeta[$m.Name]
+                if ($meta -and $meta.Sha256) {
+                    $h = (Get-FileHash $TempZip -Algorithm SHA256).Hash.ToLower()
+                    if ($h -ne $meta.Sha256.ToLower()) {
+                        Write-Host "Server download: $($m.Name) 自洽 sha256 不匹配 (镜像可能被污染/半更新)"
+                        $svrOk = $false; continue
+                    }
+                }
+                $svrOk = $true; break
+            } catch { $svrOk = $false }
         }
         if (-not $svrOk -and (Test-Path $LatestSvr)) {
             Write-Host "Server download: 所有镜像失败，使用本地缓存。"
             Copy-Item $LatestSvr $TempZip -Force
-            try { $tz=[System.IO.Compression.ZipFile]::OpenRead($TempZip); if ($tz.Entries.Count -gt 0) { $svrOk = $true }; $tz.Dispose() } catch { }
+            if (Test-ZipExtract $TempZip) { $svrOk = $true }
+            else { Write-Host "Server download: 本地缓存损坏, 弃用"; Remove-Item $TempZip -Force -ErrorAction SilentlyContinue }
         }
         if ($svrOk) { $svrSize = "$([math]::Round((Get-Item $TempZip).Length/1KB)) KB" }
         Write-Host "Server download: $(if($svrOk){'OK'}else{'FAILED'}) ($svrSize)"
@@ -1122,6 +1226,41 @@ try {
             [void]$svrPS.AddScript({
                 param($u, $t, $tok, $timeout, $maxRetries)
                 Remove-Item $t -Force -ErrorAction SilentlyContinue
+                # v1.921: ZIP 完整性快速校验 (Runspace 内无法调用外部函数, 内联实现)
+                function Test-ZipIntegrity($p) {
+                    try {
+                        $fs = [IO.File]::OpenRead($p)
+                        try {
+                            if ($fs.Length -lt 22) { return $false }
+                            $head = New-Object byte[] 4
+                            [void]$fs.Read($head, 0, 4)
+                            if (-not ($head[0] -eq 0x50 -and $head[1] -eq 0x4B)) { return $false }
+                            $scanLen = [Math]::Min([long]$fs.Length, 65557)
+                            $buf = New-Object byte[] $scanLen
+                            [void]$fs.Seek(-$scanLen, [IO.SeekOrigin]::End)
+                            [void]$fs.Read($buf, 0, $scanLen)
+                            for ($i = 0; $i -lt $scanLen - 3; $i++) {
+                                if ($buf[$i] -eq 0x50 -and $buf[$i+1] -eq 0x4B -and $buf[$i+2] -eq 0x05 -and $buf[$i+3] -eq 0x06) { return $true }
+                            }
+                            return $false
+                        } finally { $fs.Dispose() }
+                    } catch { return $false }
+                }
+                # v1.921: CRC 内容级校验 (完整解压, ZIP 条目自带 CRC32 自动校验)
+                function Test-ZipExtract($p) {
+                    try {
+                        $zip = [System.IO.Compression.ZipFile]::OpenRead($p)
+                        try {
+                            if ($zip.Entries.Count -eq 0) { return $false }
+                            $buf = New-Object byte[] 65536
+                            foreach ($entry in $zip.Entries) {
+                                $s = $entry.Open()
+                                try { while ($s.Read($buf, 0, $buf.Length) -gt 0) { } } finally { $s.Dispose() }
+                            }
+                            return $true
+                        } finally { $zip.Dispose() }
+                    } catch { return $false }
+                }
             $h = if ($tok) { @{ "PRIVATE-TOKEN" = $tok } } else { @{} }
             for ($a = 1; $a -le $maxRetries; $a++) {
                 try {
@@ -1130,7 +1269,8 @@ try {
                     } else {
                         Invoke-WebRequest -Uri $u -OutFile $t -UseBasicParsing -TimeoutSec $timeout
                     }
-                    if ((Test-Path $t) -and (Get-Item $t).Length -gt 51200) { return $true }
+                    # 大小 + 魔数 + CRC 内容级三重校验: 截断/损坏文件立即重试
+                    if ((Test-Path $t) -and (Get-Item $t).Length -gt 51200 -and (Test-ZipIntegrity $t) -and (Test-ZipExtract $t)) { return $true }
                     Remove-Item $t -Force -ErrorAction SilentlyContinue
                 } catch {
                     Remove-Item $t -Force -ErrorAction SilentlyContinue
@@ -1158,6 +1298,41 @@ try {
     [void]$gmPS.AddScript({
         param($u, $t, $tok, $timeout, $maxRetries)
         Remove-Item $t -Force -ErrorAction SilentlyContinue
+        # v1.921: ZIP 完整性快速校验 (Runspace 内内联实现)
+        function Test-ZipIntegrity($p) {
+            try {
+                $fs = [IO.File]::OpenRead($p)
+                try {
+                    if ($fs.Length -lt 22) { return $false }
+                    $head = New-Object byte[] 4
+                    [void]$fs.Read($head, 0, 4)
+                    if (-not ($head[0] -eq 0x50 -and $head[1] -eq 0x4B)) { return $false }
+                    $scanLen = [Math]::Min([long]$fs.Length, 65557)
+                    $buf = New-Object byte[] $scanLen
+                    [void]$fs.Seek(-$scanLen, [IO.SeekOrigin]::End)
+                    [void]$fs.Read($buf, 0, $scanLen)
+                    for ($i = 0; $i -lt $scanLen - 3; $i++) {
+                        if ($buf[$i] -eq 0x50 -and $buf[$i+1] -eq 0x4B -and $buf[$i+2] -eq 0x05 -and $buf[$i+3] -eq 0x06) { return $true }
+                    }
+                    return $false
+                } finally { $fs.Dispose() }
+            } catch { return $false }
+        }
+        # v1.921: CRC 内容级校验 (完整解压, ZIP 条目自带 CRC32 自动校验)
+        function Test-ZipExtract($p) {
+            try {
+                $zip = [System.IO.Compression.ZipFile]::OpenRead($p)
+                try {
+                    if ($zip.Entries.Count -eq 0) { return $false }
+                    $buf = New-Object byte[] 65536
+                    foreach ($entry in $zip.Entries) {
+                        $s = $entry.Open()
+                        try { while ($s.Read($buf, 0, $buf.Length) -gt 0) { } } finally { $s.Dispose() }
+                    }
+                    return $true
+                } finally { $zip.Dispose() }
+            } catch { return $false }
+        }
         $h = if ($tok) { @{ "PRIVATE-TOKEN" = $tok } } else { @{} }
         for ($a = 1; $a -le $maxRetries; $a++) {
             try {
@@ -1166,7 +1341,8 @@ try {
                 } else {
                     Invoke-WebRequest -Uri $u -OutFile $t -UseBasicParsing -TimeoutSec $timeout
                 }
-                if ((Test-Path $t) -and (Get-Item $t).Length -gt 10240) { return $true }
+                # 大小 + 魔数 + CRC 内容级三重校验: 截断/损坏文件立即重试
+                if ((Test-Path $t) -and (Get-Item $t).Length -gt 10240 -and (Test-ZipIntegrity $t) -and (Test-ZipExtract $t)) { return $true }
                 Remove-Item $t -Force -ErrorAction SilentlyContinue
             } catch {
                 Remove-Item $t -Force -ErrorAction SilentlyContinue
@@ -1288,11 +1464,12 @@ try {
                 $testZip.Dispose()
             } catch { }
         }
-        # 本地 GM 兜底
+        # 本地 GM 兜底 (v1.921: 启用前做 CRC 内容级校验)
         if (-not $gmOk -and (Test-Path $LatestGM)) {
             Write-Host "  所有在线GM源失败，用本地缓存: $LatestGM"
             Copy-Item $LatestGM $gmTempZip -Force
-            try { $tz=[System.IO.Compression.ZipFile]::OpenRead($gmTempZip); if ($tz.Entries.Count -gt 0) { $gmOk = $true }; $tz.Dispose() } catch { }
+            if (Test-ZipExtract $gmTempZip) { $gmOk = $true }
+            else { Write-Host "  GM 本地缓存损坏, 弃用"; Remove-Item $gmTempZip -Force -ErrorAction SilentlyContinue }
         }
     }
 
@@ -1343,11 +1520,12 @@ try {
         }
     }
 
-    # 终极兜底: 本地 latest/
+    # 终极兜底: 本地 latest/ (v1.921: 启用前做 CRC 内容级校验)
     if (-not $svrOk -and (Test-Path $LatestSvr)) {
         Write-Host "  使用本地缓存: $LatestSvr"
         Copy-Item $LatestSvr $TempZip -Force
-        try { $tz=[System.IO.Compression.ZipFile]::OpenRead($TempZip); if ($tz.Entries.Count -gt 0) { $svrOk = $true }; $tz.Dispose() } catch { }
+        if (Test-ZipExtract $TempZip) { $svrOk = $true }
+        else { Write-Host "  本地缓存损坏, 弃用"; Remove-Item $TempZip -Force -ErrorAction SilentlyContinue }
     }
 
     if (-not $svrOk) {
@@ -1573,13 +1751,28 @@ try {
     $buildOk = $false
     $gmBuildOk = $false
 
-    # ---- 备份编译产物中的数据库 ----
-    # dist 目录下的 inventory.db 是编译后的服务端使用的数据库
-    # 编译过程中可能会被覆盖，先备份
-    $distDb = Join-Path $SrcRoot "dist\win-x64\Data\inventory.db"
-    $distDbBak = Join-Path $SrcRoot "dist\win-x64\Data\inventory.db.tmpbak"
-    if (Test-Path $distDb) {
-        Copy-Item $distDb $distDbBak -Force
+    # ---- 备份编译产物中的数据库文件 (v1.922) ----
+    # dist 目录下的数据库由编译过程覆盖, 只备份 inventory.db 不够:
+    # 数据库结构更新会生成 inventory.db-shm / inventory.db-wal 等副件,
+    # 这里把 Data 下所有 DB 相关文件(.db 及副件)整体快照, 编译后原样恢复
+    $distDataDir = Join-Path $SrcRoot "dist\win-x64\Data"
+    $distDbBakDir = Join-Path $SrcRoot "dist\win-x64\.db-backup"
+    if (Test-Path $distDbBakDir) { Remove-Item -Recurse -Force $distDbBakDir -ErrorAction SilentlyContinue }
+    $distDbCount = 0
+    if (Test-Path $distDataDir) {
+        $dbFiles = Get-ChildItem $distDataDir -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '\.db' }
+        foreach ($df in $dbFiles) {
+            $rel = $df.FullName.Substring($distDataDir.Length).TrimStart('\')
+            $dstF = Join-Path $distDbBakDir $rel
+            $dstDir = Split-Path $dstF -Parent
+            if (-not (Test-Path $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
+            Copy-Item $df.FullName $dstF -Force
+            $distDbCount++
+        }
+        Write-Host "Backed up $distDbCount DB file(s) from dist Data"
+    } else {
+        Write-Host "No dist Data directory, skip DB backup."
     }
 
     if (-not $dn) {
@@ -1812,11 +2005,20 @@ try {
         }
     }
 
-    # ---- 恢复 dist 目录的数据库 ----
-    if (Test-Path $distDbBak) {
-        Copy-Item $distDbBak $distDb -Force
-        Remove-Item $distDbBak -Force
-        Write-Host "Restored dist inventory.db"
+    # ---- 恢复 dist 目录的数据库文件 (v1.922) ----
+    # 编译会覆盖 Data 目录, 把快照中的全部 DB 文件(含 shm/wal 副件)原样恢复
+    if (Test-Path $distDbBakDir) {
+        $restored = 0
+        Get-ChildItem $distDbBakDir -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            $rel = $_.FullName.Substring($distDbBakDir.Length).TrimStart('\')
+            $dstF = Join-Path $distDataDir $rel
+            $dstDir = Split-Path $dstF -Parent
+            if (-not (Test-Path $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
+            Copy-Item $_.FullName $dstF -Force
+            $restored++
+        }
+        Remove-Item -Recurse -Force $distDbBakDir -ErrorAction SilentlyContinue
+        Write-Host "Restored $restored DB file(s) to dist Data"
     }
 
     # ---- 补充检查：确保关键配置文件存在 ----

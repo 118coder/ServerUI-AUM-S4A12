@@ -139,7 +139,7 @@ public class MirrorUploadService
                 {
                     timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
                     hostname,
-                    process_id = Environment.ProcessId,
+                    process_id = Compat.Pid,
                     version
                 };
                 var lockJson = JsonSerializer.Serialize(lockData);
@@ -226,9 +226,9 @@ public class MirrorUploadService
                 return false;
             }
 
-            var sha = Convert.ToHexString(SHA256.HashData(zip)).ToLower();
+            var sha = Compat.Sha256Hex(zip).ToLower();
             var zipSize = zip.Length;
-            OutputReceived?.Invoke($"[镜像] 下载完成, 大小:{zipSize / 1024}KB, SHA:{sha[..8]}...");
+            OutputReceived?.Invoke($"[镜像] 下载完成, 大小:{zipSize / 1024}KB, SHA:{sha.Substring(0, 8)}...");
 
             try
             {
@@ -304,7 +304,7 @@ public class MirrorUploadService
                     await UploadLatestCopy(zip);
 
                     OutputReceived?.Invoke("[镜像] 同步 GM 工具源码...");
-                    await MirrorGMTool(sha[..8]);
+                    await MirrorGMTool(sha.Substring(0, 8));
 
                     var ghDownloadUrl = $"https://raw.githubusercontent.com/{GitHubRepo}/main/mirrors/{pkgName}.zip";
                     var cbDownloadUrl = $"https://codeberg.org/118coder/ServerS4A12.86JP/raw/branch/main/mirrors/{pkgName}.zip";
@@ -404,8 +404,9 @@ public class MirrorUploadService
     {
         try
         {
+            // v1.919: 从 GitGud 主源下载 GM 工具源码（与旧版参考脚本一致）
             var gmUrls = new[] {
-                "https://codeberg.org/rewio/DfoGmTool/archive/main.zip"
+                "https://gitgud.io/api/v4/projects/rewio%2F86JPGMTool/repository/archive.zip?sha=main"
             };
             byte[] gmZip = null;
             foreach (var url in gmUrls)
@@ -414,6 +415,8 @@ public class MirrorUploadService
                 {
                     using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
                     client.DefaultRequestHeaders.Add("User-Agent", "ServerUI-Mirror/1.0");
+                    if (url.Contains("gitgud.io"))
+                        client.DefaultRequestHeaders.Add("PRIVATE-TOKEN", GitGudToken);
                     gmZip = await client.GetByteArrayAsync(url);
                     if (gmZip.Length > 10240) break;
                 }
@@ -426,8 +429,8 @@ public class MirrorUploadService
                 return;
             }
 
-            var gmSha = Convert.ToHexString(SHA256.HashData(gmZip)).ToLower();
-            OutputReceived?.Invoke($"[镜像] GM: {gmZip.Length/1024}KB, SHA:{gmSha[..8]}...");
+            var gmSha = Compat.Sha256Hex(gmZip).ToLower();
+            OutputReceived?.Invoke($"[镜像] GM: {gmZip.Length/1024}KB, SHA:{gmSha.Substring(0, 8)}...");
 
             try
             {
@@ -451,7 +454,7 @@ public class MirrorUploadService
                     if (doc.RootElement.TryGetProperty("content", out var c))
                     {
                         var oldBytes = Convert.FromBase64String(c.GetString() ?? "");
-                        var oldSha = Convert.ToHexString(SHA256.HashData(oldBytes)).ToLower();
+                        var oldSha = Compat.Sha256Hex(oldBytes).ToLower();
                         if (oldSha == gmSha)
                         {
                             OutputReceived?.Invoke("[镜像] GM SHA相同 → 跳过。");
@@ -509,9 +512,10 @@ public class MirrorUploadService
             }
 
             var bytes = File.ReadAllBytes(logFile);
-            var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLower();
-            OutputReceived?.Invoke($"[镜像] 更新日志 SHA:{sha[..8]}... 大小:{bytes.Length}B");
+            var sha = Compat.Sha256Hex(bytes).ToLower();
+            OutputReceived?.Invoke($"[镜像] 更新日志 SHA:{sha.Substring(0, 8)}... 大小:{bytes.Length}B");
 
+            // 先检查 GitHub 上的 SHA 是否已相同（快速跳过）
             try
             {
                 var token = Decode2("WjJod1gxQlpaVEZNYzBjMlpWZElhMkZNUTNWa1RVbHNkVTFEVmxKb1pqVlllREZwTUVoa01BPT0=");
@@ -526,22 +530,24 @@ public class MirrorUploadService
                     if (doc.RootElement.TryGetProperty("content", out var c))
                     {
                         var existingBytes = Convert.FromBase64String(c.GetString() ?? "");
-                        var existingSha = Convert.ToHexString(SHA256.HashData(existingBytes)).ToLower();
+                        var existingSha = Compat.Sha256Hex(existingBytes).ToLower();
                         if (existingSha == sha)
                         {
                             OutputReceived?.Invoke("[镜像] 更新日志 SHA相同 → 跳过。");
                             return;
                         }
-                        OutputReceived?.Invoke($"[镜像] 更新日志变更: 旧SHA={existingSha[..8]}... → 新SHA={sha[..8]}...");
+                        OutputReceived?.Invoke($"[镜像] 更新日志变更: 旧SHA={existingSha.Substring(0, 8)}... → 新SHA={sha.Substring(0, 8)}...");
                     }
                 }
             }
             catch { OutputReceived?.Invoke("[镜像] 更新日志首次上传。"); }
 
-            var path = "mirrors/%E6%9B%B4%E6%96%B0%E6%97%A5%E5%BF%97.txt";
-
+            // 每个平台使用各自的独立上传逻辑（自行处理编码差异）
             foreach (var p in _platforms)
-                await p.UploadFileAsync(path, bytes, "更新日志同步");
+            {
+                var platformOk = await p.UploadChangelogAsync(bytes, sha, "更新日志同步");
+                OutputReceived?.Invoke($"[镜像] {p.Name} 更新日志: {(platformOk ? "OK" : "失败")}");
+            }
         }
         catch (Exception ex)
         {

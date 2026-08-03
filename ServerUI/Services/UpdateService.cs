@@ -351,7 +351,7 @@ public class UpdateService
         foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
             // Build outputs are regenerated and do not describe repository updates.
-            var relative = Path.GetRelativePath(root, path);
+            var relative = Compat.GetRelativePath(root, path);
             if (relative.StartsWith(".git" + Path.DirectorySeparatorChar)
                 || relative.StartsWith("dist" + Path.DirectorySeparatorChar))
                 continue;
@@ -391,12 +391,14 @@ public class UpdateService
      */
     public string ReadLogTail(string baseDir, int lines = 40)
     {
-        var log = Path.Combine(baseDir, "更新日志.txt");
-        if (!File.Exists(log)) return "";
-        var all = File.ReadAllLines(log, Encoding.UTF8);
+        var text = GetLogText(baseDir);
+        if (string.IsNullOrEmpty(text)) return "";
+        var all = text.Split('\n');
         // 从后往前取 lines 行（如果文件不够 lines 行，从头开始取）
         var start = Math.Max(0, all.Length - lines);
-        return string.Join("\n", all[start..]);
+        var tail = new System.Collections.Generic.List<string>();
+        for (int i = start; i < all.Length; i++) tail.Add(all[i]);
+        return string.Join("\n", tail.ToArray()).TrimEnd('\r');
     }
 
     /*
@@ -407,10 +409,8 @@ public class UpdateService
      */
     public string GetVersion(string baseDir)
     {
-        var log = Path.Combine(baseDir, "更新日志.txt");
-        if (!File.Exists(log)) return "--";
-
-        var text = File.ReadAllText(log, Encoding.UTF8);
+        var text = GetLogText(baseDir);
+        if (string.IsNullOrEmpty(text)) return "--";
 
         // 查找最后一个 "版本:" 位置
         var idx = text.LastIndexOf("版本:");
@@ -423,5 +423,33 @@ public class UpdateService
         }
 
         return "--";
+    }
+
+    // =================================================================
+    // 更新日志读取缓存 (性能优化)
+    // 三个窗口每 2 秒都会读取 更新日志.txt, 直接用 File.ReadAllText
+    // 会产生持续磁盘 IO; 这里按 LastWriteTimeUtc 缓存, 文件未变化时
+    // 只做一次廉价的文件元数据查询
+    // =================================================================
+    static string _logCachePath = "";
+    static DateTime _logCacheWrite = DateTime.MinValue;
+    static string _logCacheText = "";
+
+    public string GetLogText(string baseDir)
+    {
+        var log = Path.Combine(baseDir, "更新日志.txt");
+        if (!File.Exists(log)) return "";
+        try
+        {
+            var lw = File.GetLastWriteTimeUtc(log);
+            if (lw != _logCacheWrite || _logCachePath != log)
+            {
+                _logCacheWrite = lw;
+                _logCachePath = log;
+                _logCacheText = File.ReadAllText(log, Encoding.UTF8);
+            }
+            return _logCacheText;
+        }
+        catch { return ""; }
     }
 }
