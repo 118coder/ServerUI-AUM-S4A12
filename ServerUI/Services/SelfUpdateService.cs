@@ -281,10 +281,45 @@ public class SelfUpdateService
                 return;
             }
 
+            // R7.3 编译 Win7 兼容模式 exe (ServerUI-兼容模式.exe)
+            // 仓库需包含与 ServerUI.csproj 同目录的 ServerUI-Win7.csproj (共享源码, net48)
+            string win7ExePath = null;
+            var win7Proj = Path.Combine(srcDir, "ServerUI-Win7.csproj");
+            if (File.Exists(win7Proj))
+            {
+                OutputReceived?.Invoke("[AUM更新] 正在编译 Win7 兼容模式...");
+                try
+                {
+                    var win7PublishDir = Path.Combine(tmpDir, "publish-win7");
+                    var exit7 = await RunDotnet(sdk, $"restore \"{win7Proj}\" --ignore-failed-sources", srcDir);
+                    if (exit7 == 0)
+                    {
+                        exit7 = await RunDotnet(sdk, $"publish \"{win7Proj}\" -c Release -o \"{win7PublishDir}\"", srcDir);
+                        var win7Exe = Path.Combine(win7PublishDir, "ServerUI-Win7.exe");
+                        if (exit7 == 0 && File.Exists(win7Exe)
+                            && new FileInfo(win7Exe).Length > 10240)
+                        {
+                            win7ExePath = win7Exe;
+                            OutputReceived?.Invoke("[AUM更新] Win7 兼容模式编译成功");
+                        }
+                        else
+                            OutputReceived?.Invoke("[AUM更新] Win7 兼容模式编译失败，跳过（不影响主版本）");
+                    }
+                    else
+                        OutputReceived?.Invoke("[AUM更新] Win7 兼容模式还原失败，跳过");
+                }
+                catch (Exception ex7)
+                {
+                    OutputReceived?.Invoke("[AUM更新] Win7 兼容模式异常: " + ex7.Message);
+                }
+            }
+            else
+                OutputReceived?.Invoke("[AUM更新] 仓库未含 ServerUI-Win7.csproj，跳过兼容模式编译");
+
             // R7.5 编译成功后，同步源码到本地（异步，不影响替换流程）
             try { SyncDirectory(srcDir, localDir); CleanDuplicates(localDir); SyncRootFiles(rootDir, Path.GetDirectoryName(localDir) ?? localDir); ReorganizeScripts(Path.GetDirectoryName(localDir) ?? localDir); } catch { }
 
-            // R7.6 下载镜像中的更新日志（不编译，直接拉取）
+            // R7.6 下载镜像中的更新日志（不编译，直接拉取；仅本地缺失时，避免版本回退）
             try { await DownloadChangelogFromMirror(Path.GetDirectoryName(localDir) ?? localDir); } catch { }
 
             // R8 生成替换脚本并退出
@@ -295,6 +330,12 @@ public class SelfUpdateService
             psScript.AppendLine("$oldPid = " + Compat.Pid + ";");
             psScript.AppendLine("$newExe = @\"\n" + fdExePath + "\n\"@;");
             psScript.AppendLine("$target = @\"\n" + curExe + "\n\"@;");
+            if (win7ExePath != null)
+            {
+                psScript.AppendLine("$win7New = @\"\n" + win7ExePath + "\n\"@;");
+                psScript.AppendLine("$win7Target = Join-Path (Split-Path $target -Parent) 'ServerUI-兼容模式.exe';");
+                psScript.AppendLine("$win7Cfg = $win7New + '.config';");
+            }
             psScript.AppendLine("$tmpDir = @\"\n" + tmpDir + "\n\"@;");
             psScript.AppendLine("Start-Sleep -Seconds 2;");
             psScript.AppendLine("# 等待旧进程完全退出 (最多等 30 秒)");
@@ -312,6 +353,17 @@ public class SelfUpdateService
             psScript.AppendLine("    Write-Host \"替换失败: $_\";");
             psScript.AppendLine("    Start-Sleep -Seconds 10;");
             psScript.AppendLine("}");
+            if (win7ExePath != null)
+            {
+                psScript.AppendLine("# 同步 Win7 兼容模式 exe 到程序目录");
+                psScript.AppendLine("try {");
+                psScript.AppendLine("    Copy-Item -LiteralPath $win7New -Destination $win7Target -Force;");
+                psScript.AppendLine("    if (Test-Path $win7Cfg) { Copy-Item -LiteralPath $win7Cfg -Destination ($win7Target + '.config') -Force; }");
+                psScript.AppendLine("    Write-Host '兼容模式已同步';");
+                psScript.AppendLine("} catch {");
+                psScript.AppendLine("    Write-Host \"兼容模式同步失败: $_\";");
+                psScript.AppendLine("}");
+            }
             psScript.AppendLine("# 清理临时目录");
             psScript.AppendLine("Start-Sleep -Seconds 2;");
             psScript.AppendLine("Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue;");
@@ -319,6 +371,8 @@ public class SelfUpdateService
 
             OutputReceived?.Invoke("[AUM更新] 即将退出并完成替换...");
             OutputReceived?.Invoke("[AUM更新] 当前程序: " + curExe + "  →  将被新版本覆盖");
+            if (win7ExePath != null)
+                OutputReceived?.Invoke("[AUM更新] Win7 兼容模式: ServerUI-兼容模式.exe 将同步到程序目录");
             Completed?.Invoke(true);
 
             Process.Start(new ProcessStartInfo
@@ -492,6 +546,12 @@ public class SelfUpdateService
     {
         try
         {
+            // v2.03: 仅当本地不存在 更新日志.txt 时才下载 —
+            // 镜像日志由上传者按次上传, 可能落后于本地(版本回退), 绝不覆盖本地
+            var dest = Path.Combine(destDir, "更新日志.txt");
+            if (File.Exists(dest))
+                return;
+
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
             client.DefaultRequestHeaders.Add("User-Agent", "ServerUI-AUM");
 
@@ -507,7 +567,6 @@ public class SelfUpdateService
                     var data = await client.GetByteArrayAsync(url);
                     if (data.Length > 100)
                     {
-                        var dest = Path.Combine(destDir, "更新日志.txt");
                         File.WriteAllBytes(dest, data);
                         return;
                     }
@@ -526,7 +585,10 @@ public class SelfUpdateService
             foreach (var f in Directory.GetFiles(repoRoot, pattern))
             {
                 var name = Path.GetFileName(f);
-                if (name.Contains("GameLog") || name.Contains("运行日志") || name.Contains("本地游戏S4")) continue;
+                // v2.03: 更新日志.txt 由服务端更新流程维护(含提交记录), 仓库根目录同步跳过,
+                // 避免 AUM 更新把旧日志覆盖到本地导致版本回退
+                if (name.Contains("GameLog") || name.Contains("运行日志") || name.Contains("本地游戏S4")
+                    || name == "更新日志.txt") continue;
                 var dest = Path.Combine(userRoot, name);
                 var srcInfo = new FileInfo(f);
 
