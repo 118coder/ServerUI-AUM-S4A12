@@ -844,6 +844,71 @@ public partial class MainForm : AntdUI.Window
     }
 
     /*
+     * 扫描 AUM管理组件 根目录残留的 .ps1 文件
+     * 历史版本曾在根目录散落 .ps1, 现核心脚本统一在 ps1核心\;
+     * 残留文件可能被旧 bat 引用, 干扰核心更新功能的正确性
+     */
+    List<string> FindLeftoverPs1()
+    {
+        var list = new List<string>();
+        try
+        {
+            foreach (var f in Directory.GetFiles(_ad, "*.ps1"))
+                list.Add(Path.GetFileName(f));
+            list.Sort(StringComparer.OrdinalIgnoreCase);
+        }
+        catch { }
+        return list;
+    }
+
+    /*
+     * 清理残留 .ps1 — 移入 旧版ps1\ 备份 (ps1核心\ 为权威副本, 不直接删除)
+     */
+    void CleanLeftoverPs1(List<string> files)
+    {
+        var bak = Path.Combine(_ad, "旧版ps1");
+        int moved = 0;
+        foreach (var name in files)
+        {
+            var src = Path.Combine(_ad, name);
+            if (!File.Exists(src)) continue;
+            try
+            {
+                Directory.CreateDirectory(bak);
+                var dst = Path.Combine(bak, name);
+                if (File.Exists(dst)) File.Delete(dst);
+                File.Move(src, dst);
+                moved++;
+                Lg(">>> 已清理残留 PS1: " + name, Gn);
+            }
+            catch (Exception ex)
+            {
+                Lg(">>> 清理失败: " + name + " - " + ex.Message, Or);
+            }
+        }
+        Lg(">>> 残留 PS1 清理完成: " + moved + " 个文件已移入 旧版ps1\\", Gn);
+    }
+
+    /*
+     * 检测并提示清理残留 PS1 (更新/更新AUM 前调用; 无残留则不弹窗)
+     */
+    void CheckLeftoverPs1Prompt()
+    {
+        var leftovers = FindLeftoverPs1();
+        if (leftovers.Count == 0) return;
+
+        var r = MessageBox.Show(
+            "检测到 AUM管理组件 目录下残留 " + leftovers.Count + " 个 .ps1 文件：\n\n"
+            + string.Join("\n", leftovers) + "\n\n"
+            + "核心脚本已统一整理到【ps1核心】目录，残留文件可能干扰核心更新功能的正确性。\n"
+            + "是否将这些残留文件移入【旧版ps1】备份并清理？",
+            "检测到残留 PS1 文件",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (r == DialogResult.Yes)
+            CleanLeftoverPs1(leftovers);
+    }
+
+    /*
      * 安装新安全DLL (InstallSecurityDll) — 从 实用工具包\DLL覆盖\ 解压
      * 86JP-DLL安全性补丁.zip 并覆盖到游戏根目录 (DNF.exe 所在目录)
      * 更新时自动调用; 检测到标记文件 86JP-DLL安全性补丁-已安装.txt 则跳过
