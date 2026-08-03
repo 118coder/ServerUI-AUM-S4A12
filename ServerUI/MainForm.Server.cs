@@ -783,6 +783,8 @@ public partial class MainForm : AntdUI.Window
 
     internal async System.Threading.Tasks.Task CheckAndUpdateAUM()
     {
+        // v2.03: 更新AUM 前检测残留 PS1 (无残留不弹窗)
+        CheckLeftoverPs1Prompt();
         if (!_hasSdk)
         {
             Lg("[AUM更新] 需要 .NET 10 SDK 才能自更新，请先点击【安装NET.10 SDK】安装。", Rd);
@@ -1006,7 +1008,8 @@ public partial class MainForm : AntdUI.Window
      */
     internal async System.Threading.Tasks.Task RI()
     {
-        // v2.02: 更新时自动执行安全DLL安装 (已安装过则跳过)
+        // v2.03: 更新前检测残留 PS1 (无残留不弹窗) + 自动安装安全DLL (已安装则跳过)
+        CheckLeftoverPs1Prompt();
         InstallSecurityDll();
         if (!await CanUpdate()) return;
         _ = TryMirrorUpload();
@@ -1052,7 +1055,8 @@ public partial class MainForm : AntdUI.Window
      */
     internal     async System.Threading.Tasks.Task RF()
     {
-        // v2.02: 更新时自动执行安全DLL安装 (已安装过则跳过)
+        // v2.03: 更新前检测残留 PS1 (无残留不弹窗) + 自动安装安全DLL (已安装则跳过)
+        CheckLeftoverPs1Prompt();
         InstallSecurityDll();
         if (!await CanUpdate()) return;
         if (_sv.IsRunning)
