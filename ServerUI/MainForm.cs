@@ -61,9 +61,9 @@ public partial class MainForm : AntdUI.Window
 
     // VER = 当前工具版本号 — 显示在窗口标题和启动日志中
 #if NET48
-    internal const string VER = "2.03-V";   // Win7 兼容模式
+    internal const string VER = "2.031-V";   // Win7 兼容模式
 #else
-    internal const string VER = "2.03";
+    internal const string VER = "2.031";
 #endif
 
     // ===== 路径计算 =====
@@ -452,7 +452,6 @@ public partial class MainForm : AntdUI.Window
     /*
      * 卡片工厂 — 圆角卡片 (主题自适应背景 + 阴影 + 1px 主题边框)
      * BorderColor 不指定 → 使用主题 BorderColor, 深浅模式下自动适配且清晰可见
-     * v2.03: 阴影 2→1, 减少重绘合成开销
      */
     AntdUI.Panel Card(int radius = 8, int shadow = 1)
     {
