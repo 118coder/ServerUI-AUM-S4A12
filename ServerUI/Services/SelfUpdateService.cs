@@ -318,6 +318,9 @@ public class SelfUpdateService
 
             // R7.5 编译成功后，同步源码到本地（异步，不影响替换流程）
             try { SyncDirectory(srcDir, localDir); CleanDuplicates(localDir); SyncRootFiles(rootDir, Path.GetDirectoryName(localDir) ?? localDir); ReorganizeScripts(Path.GetDirectoryName(localDir) ?? localDir); } catch { }
+            // v2.031: 仓库包整体覆盖 — 实用工具包/DX11运行/DX12运行/dfogmtool/latest 等
+            // 新增文件夹随更新自动同步进 AUM管理组件 (保留原有同步逻辑不变)
+            try { SyncRepoToAumDir(rootDir, Path.GetDirectoryName(localDir) ?? localDir); } catch { }
 
             // R7.6 下载镜像中的更新日志（不编译，直接拉取；仅本地缺失时，避免版本回退）
             try { await DownloadChangelogFromMirror(Path.GetDirectoryName(localDir) ?? localDir); } catch { }
@@ -889,13 +892,46 @@ public class SelfUpdateService
         }
     }
 
+    /// <summary>
+    /// 整体覆盖同步仓库包 → AUM管理组件 (v2.031)
+    /// 仓库 zip 即完整仓库: 根目录文件 + 除 ServerS4A12-AUM(服务端) 外的
+    /// 所有一级子目录 (实用工具包 / DX11运行 / DX12运行 / dfogmtool / latest / ps1核心 等)
+    /// 全部覆盖同步, 用户新增的资源文件夹随更新自动带下来
+    /// </summary>
+    static void SyncRepoToAumDir(string repoRoot, string aumDir)
+    {
+        // 根目录文件 (跳过更新日志, 由服务端更新流程维护, 避免版本回退)
+        foreach (var f in Directory.GetFiles(repoRoot))
+        {
+            var name = Path.GetFileName(f);
+            if (name.Contains("更新日志") || name.Contains("GameLog") || name.Contains("运行日志")) continue;
+            try { File.Copy(f, Path.Combine(aumDir, name), true); } catch { }
+        }
+
+        // 一级子目录 (跳过服务端/版本控制目录)
+        foreach (var dir in Directory.GetDirectories(repoRoot))
+        {
+            var name = Path.GetFileName(dir);
+            if (string.Equals(name, "ServerS4A12-AUM", StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.Equals(name, ".git", StringComparison.OrdinalIgnoreCase)) continue;
+            var target = Path.Combine(aumDir, name);
+            try
+            {
+                Directory.CreateDirectory(target);
+                SyncDirectory(dir, target);
+            }
+            catch { }
+        }
+    }
+
     static void SyncDirectory(string src, string dst)
     {
         foreach (var f in Directory.GetFiles(src, "*", SearchOption.AllDirectories))
         {
             var rel = f.Substring(src.Length).TrimStart(Path.DirectorySeparatorChar);
             if (rel.StartsWith("bin" + Path.DirectorySeparatorChar) ||
-                rel.StartsWith("obj" + Path.DirectorySeparatorChar))
+                rel.StartsWith("obj" + Path.DirectorySeparatorChar) ||
+                rel.EndsWith("FodyWeavers.xsd", StringComparison.OrdinalIgnoreCase))
                 continue;
             var target = Path.Combine(dst, rel);
             var td = Path.GetDirectoryName(target);
