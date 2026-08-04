@@ -7,7 +7,7 @@
  *   极简模式 = 一个独立的小窗口, 只保留最基础的高频功能:
  *     - 开始游戏 (一键启动服务端并进入游戏)
  *     - GM工具  (启动 DfoGmTool 网页管理后台)
- *     - 开始更新 (执行增量更新)
+ *     - 停止服务端 (优雅停服, 防止数据库回档)
  *     - 存档切换与管理 (列表/双击切换/储存当前/撤销换挡)
  *   关闭极简窗口即返回完整模式, 主窗口完全不受影响。
  *
@@ -208,7 +208,7 @@ public partial class MiniForm : AntdUI.Window
         btPlay.Click += async (s, e) => await _main.Play();
         root.Controls.Add(btPlay, 0, 2);
 
-        // ===== GM工具 / 开始更新 =====
+        // ===== GM工具 / 停止服务端 =====
         var row2 = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -229,14 +229,23 @@ public partial class MiniForm : AntdUI.Window
         btGm.Click += (s, e) => _main.LaunchGmTool();
         btUpd = new AntdUI.Button
         {
-            Text = "开始更新",
-            Type = TTypeMini.Primary,
-            IconSvg = "ThunderboltOutlined",
+            Text = "停止服务端",
+            Type = TTypeMini.Error,
+            IconSvg = "StopOutlined",
             Dock = DockStyle.Fill,
             Cursor = Cursors.Hand,
             Margin = new Padding(4)
         };
-        btUpd.Click += async (s, e) => await _main.RI();
+        btUpd.Click += (s, e) =>
+        {
+            _main.Lg(">>> 极简模式: 停止服务端", Color.Gold);
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                _main._sv.Stop();
+                try { _main.Invoke(new Action(() =>
+                    _main.Lg(">>> 已停止服务端进程树", Color.Gold))); } catch { }
+            });
+        };
         row2.Controls.Add(btGm, 0, 0);
         row2.Controls.Add(btUpd, 1, 0);
         root.Controls.Add(row2, 0, 3);
@@ -340,7 +349,7 @@ public partial class MiniForm : AntdUI.Window
         // ===== 提示行 =====
         var tip = new AntdUI.Label
         {
-            Text = "提示: 开始游戏前建议先执行一次【开始更新】; 服务端运行中无法操作存档",
+            Text = "提示: 服务端运行中无法操作存档; 停服请点【停止服务端】(优雅停服防止回档)",
             Font = new Font("Microsoft YaHei UI", 8f),
             ForeColor = Txt2,
             Dock = DockStyle.Fill,

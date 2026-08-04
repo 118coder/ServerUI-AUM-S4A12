@@ -52,6 +52,41 @@ public class ServerService
     [DllImport("user32.dll")]
     static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+    // ===== 控制台 API (优雅停服用) =====
+    // DfoServer 是控制台程序, 提示 "Press 's' for statistics, 'q' to quit",
+    // 强杀进程会导致数据库未正常落盘而回档; 优雅停服 = 向它的控制台输入
+    // 缓冲区写入 'q' 按键, 让其自行保存并退出
+    [DllImport("kernel32.dll")]
+    static extern bool AttachConsole(uint dwProcessId);
+    [DllImport("kernel32.dll")]
+    static extern bool FreeConsole();
+    [DllImport("kernel32.dll")]
+    static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll")]
+    static extern bool WriteConsoleInput(IntPtr hConsoleInput,
+        INPUT_RECORD[] lpBuffer, uint nLength, out uint lpNumberOfEventsWritten);
+
+    const int STD_INPUT_HANDLE = -10;
+    const ushort KEY_EVENT = 0x0001;
+
+    [StructLayout(LayoutKind.Explicit)]
+    struct INPUT_RECORD
+    {
+        [FieldOffset(0)] public ushort EventType;
+        [FieldOffset(4)] public KEY_EVENT_RECORD KeyEvent;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct KEY_EVENT_RECORD
+    {
+        public int bKeyDown;        // BOOL = 4 字节 (不能用 C# bool, 会错位)
+        public ushort wRepeatCount;
+        public ushort wVirtualKeyCode;
+        public ushort wVirtualScanCode;
+        public char UnicodeChar;
+        public uint dwControlKeyState;
+    }
+
     // ===== 状态字段 =====
     // _batProcess: 持有 start-server.bat(cmd.exe) 的进程句柄
     // 通过这个句柄可以检测进程是否存活、杀进程、获取窗口句柄
@@ -195,36 +230,106 @@ public class ServerService
     }
 
     /*
-     * 停止服务端
-     * 
-     * 执行步骤（两阶段清理，确保彻底）:
-     *   1. taskkill /F /T /PID 杀 bat 进程树（含 DfoServer 子进程）
-     *   2. CleanOrphans() 兜底 — 逐个检查并强制终止残留的 DfoServer 进程
-     * 
-     * 为什么需要两阶段?
-     *   taskkill 理论上能杀整个进程树，但 Windows 进程调度可能导致短暂延迟
-     *   CleanOrphans 作为第二道防线，确保没有任何遗漏
-     * 
+     * 停止服务端 (v2.031 优雅停服)
+     *
+     * 执行步骤（先优雅、后兜底）:
+     *   1. 向 DfoServer.exe 控制台输入缓冲区写入 'q' 按键
+     *      → DfoServer 自行保存数据并退出 (数据库正常落盘, 不再回档)
+     *   2. 等待 bat 进程自然退出 (最多 10 秒)
+     *   3. 超时未退出 → taskkill /F /T 强杀兜底
+     *   4. CleanOrphans() 最终兜底 (优雅退出生效时此处无残留)
+     *
      * 使用场景:
-     *   - 用户点击 [停止服务端] 按钮
-     *   - 用户点击 [重启服务端] 按钮（先停再启）
+     *   - 用户点击 [停止服务端] / [重启服务端]
      *   - 程序关闭时自动清理
      */
     public void Stop()
     {
-        // 第一阶段: 杀 bat 进程树
-        if (_batProcess != null && !_batProcess.HasExited)
+        bool graceful = SendQuitToDfoServer();
+
+        if (graceful)
         {
-            KillProcessTree(_batProcess);
+            // 等待 bat 自然退出 (DfoServer 退出 → bat 结束 → Exited 事件清理)
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (_batProcess == null || _batProcess.HasExited) break;
+                System.Threading.Thread.Sleep(200);
+            }
+            if (_batProcess != null && !_batProcess.HasExited)
+            {
+                // 优雅退出超时 → 强杀兜底
+                KillProcessTree(_batProcess);
+            }
         }
+        else
+        {
+            // 找不到 DfoServer / 发送失败 → 直接强杀
+            if (_batProcess != null && !_batProcess.HasExited)
+                KillProcessTree(_batProcess);
+        }
+
         if (_batProcess != null)
         {
             try { _batProcess.Dispose(); } catch { }
             _batProcess = null;
         }
 
-        // 第二阶段: 兜底清理
+        // 最终兜底清理 (优雅退出已生效时, 此处不会命中)
         CleanOrphans();
+    }
+
+    /*
+     * 优雅停服核心: 向 DfoServer.exe 的控制台输入缓冲区写入 'q' 按键
+     *
+     * 原理: AttachConsole 附加到 DfoServer 的控制台 → WriteConsoleInput
+     *       写入一个 KEY_EVENT('q') → DfoServer 的 Console.ReadKey 收到 'q'
+     *       → 自行保存数据库并退出。写完后立即 FreeConsole 脱离, 不影响本进程。
+     *
+     * 返回: true = 已成功写入 (可等待优雅退出); false = 无 DfoServer 或失败
+     */
+    static bool SendQuitToDfoServer()
+    {
+        try
+        {
+            var distDir = GetDistDir();
+            var expected = Path.GetFullPath(Path.Combine(distDir, "DfoServer.exe"));
+
+            foreach (var p in Process.GetProcessesByName("DfoServer"))
+            {
+                try
+                {
+                    var exePath = p.MainModule?.FileName;
+                    if (exePath == null) continue;
+                    if (!string.Equals(exePath, expected, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    FreeConsole();   // 先脱离本进程可能持有的控制台 (无则返回 false, 无副作用)
+                    if (!AttachConsole((uint)p.Id)) continue;   // 附加失败 → 尝试下一个
+                    try
+                    {
+                        var hIn = GetStdHandle(STD_INPUT_HANDLE);
+                        if (hIn == IntPtr.Zero) continue;
+                        var rec = new INPUT_RECORD
+                        {
+                            EventType = KEY_EVENT,
+                            KeyEvent = new KEY_EVENT_RECORD
+                            {
+                                bKeyDown = 1,
+                                wRepeatCount = 1,
+                                UnicodeChar = 'q'
+                            }
+                        };
+                        WriteConsoleInput(hIn, new[] { rec }, 1, out _);
+                        return true;
+                    }
+                    finally { FreeConsole(); }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return false;
     }
 
     /*
