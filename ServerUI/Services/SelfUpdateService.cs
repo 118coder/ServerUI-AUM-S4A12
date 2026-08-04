@@ -347,10 +347,12 @@ public class SelfUpdateService
             else
                 OutputReceived?.Invoke("[AUM更新] 仓库未含 ServerUI-Win7.csproj，跳过兼容模式编译");
 
-            // R7.5 编译成功后，同步源码到本地（异步，不影响替换流程）
-            try { SyncDirectory(srcDir, localDir); CleanDuplicates(localDir); SyncRootFiles(rootDir, Path.GetDirectoryName(localDir) ?? localDir); ReorganizeScripts(Path.GetDirectoryName(localDir) ?? localDir); } catch { }
+            // R7.5 编译成功后，同步仓库内容到本地（异步，不影响替换流程）
+            // v2.031: ServerUI 源码不同步进 AUM管理组件 (用户明确不要),
+            // 仅同步根文件(bat/ps1/txt 由 SyncRootFiles+ReorganizeScripts 维护)
+            try { SyncRootFiles(rootDir, Path.GetDirectoryName(localDir) ?? localDir); ReorganizeScripts(Path.GetDirectoryName(localDir) ?? localDir); } catch { }
             // v2.031: 仓库包整体覆盖 — 实用工具包/DX11运行/DX12运行/dfogmtool/latest 等
-            // 新增文件夹随更新自动同步进 AUM管理组件 (保留原有同步逻辑不变)
+            // 新增文件夹随更新自动同步进 AUM管理组件 (ServerUI 源码目录除外)
             try { SyncRepoToAumDir(rootDir, Path.GetDirectoryName(localDir) ?? localDir); } catch { }
 
             // R7.6 下载镜像中的更新日志（不编译，直接拉取；仅本地缺失时，避免版本回退）
@@ -939,10 +941,11 @@ public class SelfUpdateService
             try { File.Copy(f, Path.Combine(aumDir, name), true); } catch { }
         }
 
-        // 一级子目录 (跳过服务端/版本控制目录)
+        // 一级子目录 (跳过 ServerUI 源码 / ServerS4A12-AUM 服务端 / 版本控制目录)
         foreach (var dir in Directory.GetDirectories(repoRoot))
         {
             var name = Path.GetFileName(dir);
+            if (string.Equals(name, "ServerUI", StringComparison.OrdinalIgnoreCase)) continue;
             if (string.Equals(name, "ServerS4A12-AUM", StringComparison.OrdinalIgnoreCase)) continue;
             if (string.Equals(name, ".git", StringComparison.OrdinalIgnoreCase)) continue;
             var target = Path.Combine(aumDir, name);
