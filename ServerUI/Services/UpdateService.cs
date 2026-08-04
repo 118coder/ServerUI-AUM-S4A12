@@ -61,6 +61,14 @@ public class UpdateService
     public const string MirrorGitHubPage   = "https://github.com/118coder/ServerS4A12.86JP";
     public const string MirrorCodebergPage = "https://codeberg.org/118coder/ServerS4A12.86JP";
 
+    // v1.922: Gitee 镜像检测令牌 (与 GiteeAdapter 一致)
+    const string GiteeTokenB64 = "WlRsbVpXWmlPRE0zWWpsaU5UVTBaamRpTVdaak4yRXdZbVprTlRKaFpUaz0=";
+    static string DecodeToken(string b64)
+    {
+        var once = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+        return Encoding.UTF8.GetString(Convert.FromBase64String(once));
+    }
+
     Process _runningProc;
 
     public void CancelUpdate()
@@ -195,7 +203,24 @@ public class UpdateService
             results["Codeberg"] = (response.IsSuccessStatusCode, cbTimer.ElapsedMilliseconds);
         }
         catch { cbTimer.Stop(); results["Codeberg"] = (false, cbTimer.ElapsedMilliseconds); }
-        
+
+        // v1.922: 补上 Gitee 检测 — Gitee 为私有仓库, raw 直链需 access_token,
+        // 用 API contents 端点验证 latest.json 可读取 (与 update.ps1 下载路径一致)
+        var geTimer = Stopwatch.StartNew();
+        try
+        {
+            var giteeToken = DecodeToken(GiteeTokenB64);
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
+            client.DefaultRequestHeaders.Add("User-Agent", "ServerUI-AUM");
+            using var response = await client.GetAsync(
+                "https://gitee.com/api/v5/repos/c118oder/ServerS4A12.86JP/contents/latest.json?access_token="
+                + giteeToken,
+                HttpCompletionOption.ResponseHeadersRead);
+            geTimer.Stop();
+            results["Gitee"] = (response.IsSuccessStatusCode, geTimer.ElapsedMilliseconds);
+        }
+        catch { geTimer.Stop(); results["Gitee"] = (false, geTimer.ElapsedMilliseconds); }
+
         return results;
     }
 

@@ -1023,7 +1023,6 @@ public partial class ClassicForm : AntdUI.Window
     // 控件工厂
     // =================================================================
     // 卡片统一显式描边 (同 Default 按钮的可见灰), 明暗主题下均清晰可辨
-    // v2.03: 阴影 1, 减少重绘合成开销
     static readonly Color CardBorder = Color.FromArgb(100, 102, 110);
 
     AntdUI.Panel Card(int radius = 8, int shadow = 1)

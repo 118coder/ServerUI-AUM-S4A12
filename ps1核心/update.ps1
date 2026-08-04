@@ -1183,7 +1183,11 @@ try {
                 Write-Host "Server download: $($m.Name) 元数据获取失败 (仅做 CRC 校验)"
             }
         }
-        $svrMirrors = @($svrMirrors | Sort-Object { $svrMeta[$_.Name].Version } -Descending)
+        # v1.922: 版本择优 + 固定优先级双键排序 —
+        # 版本标识降序, 相同/缺失时按原始顺序升序 (Gitee→GitHub→Codeberg, Gitee 国内最快)
+        $idx = 0
+        foreach ($m in $svrMirrors) { $m.Index = $idx; $idx++ }
+        $svrMirrors = @($svrMirrors | Sort-Object @{Expression={$svrMeta[$_.Name].Version}; Descending=$true}, @{Expression={$_.Index}; Descending=$false})
         foreach ($m in $svrMirrors) {
             if ($svrOk) { break }
             try {

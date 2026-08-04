@@ -750,7 +750,7 @@ public partial class MainForm : AntdUI.Window
         }
 
         _ = ValidateMirrorTokens();
-        Lg(">>> 更新前检测镜像源: GitHub / Codeberg ...", Color.CornflowerBlue);
+        Lg(">>> 更新前检测镜像源: Gitee / GitHub / Codeberg ...", Color.CornflowerBlue);
         try
         {
             var mirrors = await _up.CheckMirrorSourcesAsync();
