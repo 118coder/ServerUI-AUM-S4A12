@@ -308,8 +308,8 @@ public partial class MainForm : AntdUI.Window
         lbLu.TextAlign = ContentAlignment.MiddleLeft;
         lbLu.TextMultiLine = true;
 
-        // [更新AUM] — 蓝色（信息/更新类操作）
-        btAu = B("更新AUM", TTypeMini.Primary, "SyncOutlined");
+        // [更新AUM] — 红色（与打开PVF目录一致）
+        btAu = B("更新AUM", TTypeMini.Error, "SyncOutlined");
         btAu.Click += async (s, e) =>
         {
             Lg(">>> 正在检测 AUM 管理器更新...", Color.CornflowerBlue);
