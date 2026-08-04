@@ -172,31 +172,62 @@ public class SelfUpdateService
             Directory.CreateDirectory(publishDir);
 
             // R2 下载源码 ZIP (5次重试)
-            OutputReceived?.Invoke("[AUM更新] 正在下载最新源码...");
+            // v2.031: 流式下载 + 进度反馈 — 下载大包(GitHub 国内网速慢)时每 2 秒
+            // 输出已下载大小, 用户能直观看到进度, 不再出现"长时间无反馈像卡死"的情况
+            // 注意: HttpClient.Timeout 只作用于响应头, 不作用于流读取!
+            // 必须用 CancellationTokenSource 给整体下载加超时, 否则传输中断时会无限挂起
+            OutputReceived?.Invoke("[AUM更新] 正在从 GitHub 下载最新源码包 (约 14MB, 网络慢时请耐心等待)...");
             var ok = false;
             for (int a = 1; a <= 5; a++)
             {
                 try
                 {
-                    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+                    using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(150));
+                    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
                     client.DefaultRequestHeaders.Add("User-Agent", "ServerUI-AUM");
-                    var data = await client.GetByteArrayAsync(RepoZipUrl);
+                    using var resp = await client.GetAsync(RepoZipUrl, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                    resp.EnsureSuccessStatusCode();
+                    long total = resp.Content.Headers.ContentLength ?? 0;
 #if NET48
-                    // Win7 版 (net48) 无异步写文件 API, 用同步等价
-                    File.WriteAllBytes(tmpZip, data);
+                    // Win7 版 (net48) 无 ReadAsStreamAsync(token) 重载
+                    using var src = await resp.Content.ReadAsStreamAsync();
 #else
-                    await File.WriteAllBytesAsync(tmpZip, data);
+                    using var src = await resp.Content.ReadAsStreamAsync(cts.Token);
 #endif
+                    using (var dst = File.Create(tmpZip))
+                    {
+                        var buf = new byte[81920];
+                        long done = 0;
+                        var lastLog = DateTime.UtcNow;
+                        while (true)
+                        {
+                            var n = await src.ReadAsync(buf, 0, buf.Length, cts.Token);
+                            if (n <= 0) break;
+                            await dst.WriteAsync(buf, 0, n, cts.Token);
+                            done += n;
+                            if (DateTime.UtcNow - lastLog > TimeSpan.FromSeconds(2))
+                            {
+                                lastLog = DateTime.UtcNow;
+                                var mb = (double)done / 1048576.0;
+                                OutputReceived?.Invoke(total > 0
+                                    ? string.Format("[AUM更新] 已下载 {0:F1} / {1:F1} MB", mb, total / 1048576.0)
+                                    : string.Format("[AUM更新] 已下载 {0:F1} MB", mb));
+                            }
+                        }
+                    }
 
                     if (new FileInfo(tmpZip).Length > 10240) { ok = true; break; }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    OutputReceived?.Invoke("[AUM更新] 第 " + a + " 次下载失败: " + ex.Message);
+                }
                 if (a < 5) await Task.Delay((int)Math.Pow(2, a) * 1000);
             }
 
             if (!ok)
             {
-                OutputReceived?.Invoke("[AUM更新] 下载源码失败，请检查网络。");
+                OutputReceived?.Invoke("[AUM更新] 下载源码失败，请检查网络（GitHub 国内访问波动较大，可稍后重试）。");
                 Completed?.Invoke(false);
                 return;
             }
