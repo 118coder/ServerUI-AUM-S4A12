@@ -55,16 +55,12 @@ if (-not $svrSub) { Write-Host "ERROR: 服务端ZIP结构异常"; Read-Host "按
 $svrSrc = $svrSub.FullName
 
 $SrcRoot = Join-Path $ScriptRoot "ServerS4A12-AUM"
-$db = Join-Path $SrcRoot "Server\DfoServer\Data\inventory.db"
-$dbBak = Join-Path $SrcRoot "Server\DfoServer\Data\inventory.db.bak"
-if (Test-Path $db) { Copy-Item $db $dbBak -Force; Write-Host "  已备份 inventory.db" }
 
 Write-Host "  同步服务端文件..."
 $ch = 0
 Get-ChildItem $svrSrc -File -Recurse | ForEach-Object {
     $rel = $_.FullName.Substring($svrSrc.Length).TrimStart('\')
     if ($rel -match '(^|\\)(\.git|dist)(\\|$)') { return }
-    if ($rel -match '(^|\\)inventory\.db(\.bak)?$') { return }
     if ($rel -match '(^|\\)start-server\.(bat|sh)$') { return }
     $dst = Join-Path $SrcRoot $rel
     $dstDir = Split-Path $dst -Parent
@@ -100,8 +96,6 @@ if (Test-Path $GmZip) {
         Write-Host "  GM工具ZIP结构异常，跳过"
     }
 }
-
-if (Test-Path $dbBak) { Copy-Item $dbBak $db -Force; Remove-Item $dbBak -Force; Write-Host "  已恢复 inventory.db" }
 
 Write-Host ""
 Write-Host "[4/5] 编译..."

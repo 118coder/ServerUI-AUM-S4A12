@@ -175,12 +175,8 @@ function T($key) {
 # 更新日志文件 —— 每次更新后自动生成/更新，位于脚本同目录
 $LogFile = Join-Path $ScriptRoot (T "fn_log")
 
-# 玩家数据库文件（最重要！里面是你的所有角色数据）
-# 更新过程中会先备份再恢复，防止数据丢失
+# 玩家数据库文件（v2.033: 源码包里有更新则随同步直接覆盖, 不再备份恢复）
 $DbFile = Join-Path $SrcRoot "Server\DfoServer\Data\inventory.db"
-
-# 数据库的临时备份文件，更新完成后自动删除
-$DbBackup = Join-Path $SrcRoot "Server\DfoServer\Data\inventory.db.bak"
 
 # 临时工作目录 —— 下载的 ZIP 包和解压内容都放在这里
 # 使用系统 TEMP 目录，更新完成后会自动清理
@@ -783,8 +779,6 @@ function Sync-SourceFiles($from, $to) {
         # ---- 过滤规则：以下文件不处理 ----
         # .git 目录和 dist 目录是特殊目录，不参与同步
         if ($relative -match '(^|\\)(\.git|dist)(\\|$)') { return }
-        # 玩家数据库由脚本单独备份恢复，不参与文件同步
-        if ($relative -match '(^|\\)inventory\.db(\.bak)?$') { return }
         # 启动脚本是用户可能自行修改的，不覆盖
         if ($relative -match '(^|\\)start-server\.(bat|sh)$') { return }
 
@@ -1047,21 +1041,13 @@ try {
     }
 
     # ================================================================
-    #  [1/5] 备份玩家数据库
+    #  [1/5] 源码同步前检查 (v2.033)
     # ================================================================
-    # 这是最重要的一步！更新过程中万一出问题，可以恢复到更新前的状态
+    # v2.033: inventory.db 不再备份/恢复 — 源码包里的
+    # Server\DfoServer\Data\inventory.db 有更新则直接同步覆盖 (哪里更新替换哪里)
+    # (dist\win-x64\Data 运行时数据库仍由编译前的 DB 快照保护)
     Write-Host ""
-    Write-Host ">>> [1/5] Backing up inventory.db <<<"
-
-    # 检查数据库是否存在
-    $dbExisted = Test-Path $DbFile
-    if ($dbExisted) {
-        # 存在 → 复制到 .bak 备份文件
-        Copy-Item $DbFile $DbBackup -Force
-        Write-Host "OK ($((Get-Item $DbFile).Length) bytes)"
-    } else {
-        Write-Host "No inventory.db, skip."   # 还没有数据库（首次安装），跳过
-    }
+    Write-Host ">>> [1/5] Preparing update <<<"
     Write-Host "##PROGRESS##5"   # 进度 5%
 
     # ================================================================
@@ -1534,7 +1520,6 @@ try {
 
     if (-not $svrOk) {
         Write-Host "ERROR: Server source download failed (all sources)."
-        if ($dbExisted) { Copy-Item $DbBackup $DbFile -Force; Remove-Item $DbBackup -Force }
         exit 1
     }
 
@@ -1631,7 +1616,6 @@ try {
                 $relative = $_.FullName.Substring($from.Length).TrimStart('\')
                 # 过滤不需要同步的文件（和 Sync-SourceFiles 规则相同）
                 if ($relative -match '(^|\\)(\.git|dist)(\\|$)') { return }
-                if ($relative -match '(^|\\)inventory\.db(\.bak)?$') { return }
                 if ($relative -match '(^|\\)start-server\.(bat|sh)$') { return }
 
                 $dst = Join-Path $to $relative
@@ -1728,15 +1712,6 @@ try {
         $safetyChanges = Sync-SourceFiles $srcPath $SrcRoot
         $staleRemoved = Remove-StaleSourceFiles $srcPath $SrcRoot
         Write-Host "Safety check done: $safetyChanges file(s) updated, $staleRemoved stale removed."
-    }
-
-    # ---- 恢复数据库备份 ----
-    # 更新文件后，把备份的 inventory.db 放回原位
-    # 这样确保玩家的存档数据不丢失
-    if ($dbExisted) {
-        Copy-Item $DbBackup $DbFile -Force
-        Remove-Item $DbBackup -Force
-        Write-Host "inventory.db restored."
     }
 
     # ---- 清理临时目录 ----
@@ -2055,14 +2030,9 @@ try {
 
 } catch {
     # ================================================================
-    #  错误处理：恢复备份 + 清理临时文件
+    #  错误处理：清理临时文件
     # ================================================================
     Write-Host "ERROR: $_"
-    # 恢复数据库备份
-    if (Test-Path $DbBackup) {
-        Copy-Item $DbBackup $DbFile -Force -ErrorAction SilentlyContinue
-        Remove-Item $DbBackup -Force
-    }
     # 清理临时目录
     if (Test-Path $TempDir) {
         Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
