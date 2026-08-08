@@ -164,6 +164,19 @@ public class SelfUpdateService
         var publishDir = Path.Combine(tmpDir, "publish");
         var curExe = Compat.ExePath();
 
+        // v2.033 修复: 计算 AUM管理组件 根目录 (同步目标)
+        // 旧逻辑 GetDirectoryName(localDir) 在用户机器无 AUM管理组件\ServerUI
+        // 子目录时 (绝大多数正常部署) 会误指向 AUM管理组件 的父目录,
+        // 导致 ps1核心/实用工具包 等同步到了错误位置 (用户目录里"没更新")
+        // 正确判定: AUM管理组件 根 = 含 ServerS4A12-AUM 子目录的目录
+        var aumRoot = localDir;
+        if (!Directory.Exists(Path.Combine(aumRoot, "ServerS4A12-AUM")))
+        {
+            var parent = Path.GetDirectoryName(localDir);
+            if (parent != null && Directory.Exists(Path.Combine(parent, "ServerS4A12-AUM")))
+                aumRoot = parent;
+        }
+
         try
         {
             // R1 准备临时目录
@@ -350,13 +363,13 @@ public class SelfUpdateService
             // R7.5 编译成功后，同步仓库内容到本地（异步，不影响替换流程）
             // v2.031: ServerUI 源码不同步进 AUM管理组件 (用户明确不要),
             // 仅同步根文件(bat/ps1/txt 由 SyncRootFiles+ReorganizeScripts 维护)
-            try { SyncRootFiles(rootDir, Path.GetDirectoryName(localDir) ?? localDir); ReorganizeScripts(Path.GetDirectoryName(localDir) ?? localDir); } catch { }
-            // v2.031: 仓库包整体覆盖 — 实用工具包/DX11运行/DX12运行/dfogmtool/latest 等
+            try { SyncRootFiles(rootDir, aumRoot); ReorganizeScripts(aumRoot); } catch { }
+            // v2.031: 仓库包整体覆盖 — 实用工具包/DX11运行/DX12运行/dfogmtool/latest/ps1核心 等
             // 新增文件夹随更新自动同步进 AUM管理组件 (ServerUI 源码目录除外)
-            try { SyncRepoToAumDir(rootDir, Path.GetDirectoryName(localDir) ?? localDir); } catch { }
+            try { SyncRepoToAumDir(rootDir, aumRoot); } catch { }
 
             // R7.6 下载镜像中的更新日志（不编译，直接拉取；仅本地缺失时，避免版本回退）
-            try { await DownloadChangelogFromMirror(Path.GetDirectoryName(localDir) ?? localDir); } catch { }
+            try { await DownloadChangelogFromMirror(aumRoot); } catch { }
 
             // R8 生成替换脚本并退出
             // 用临时 PowerShell 脚本实现: 等旧进程退出 → 覆盖 EXE → 启动 → 自清理
